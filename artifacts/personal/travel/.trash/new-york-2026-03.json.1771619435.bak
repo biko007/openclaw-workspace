@@ -1,0 +1,24 @@
+{
+  "id": "new-york-2026-03",
+  "name": "New York",
+  "destination": "New York",
+  "country_code": "US",
+  "start_date": "2026-03-03",
+  "end_date": "2026-03-05",
+  "climate": "temperate",
+  "activities": [
+    "business",
+    "leisure",
+    "city"
+  ],
+  "segments": [],
+  "calendar_event_ids": [],
+  "created_at": "2026-02-20T20:21:49.257Z",
+  "updated_at": "2026-02-20T20:21:49.258Z",
+  "currency": "US-Dollar ($)",
+  "visa_de": "kein Visum erforderlich (bis 90 Tage mit ESTA)",
+  "distance_km": 5850,
+  "travel_mode": "Flugzeug",
+  "door_to_door_estimate": "ca. 12-14 Stunden (Flug FRA-JFK + Transfers)",
+  "exchange_rate_eur": "1 EUR ≈ 1,10 USD"
+}

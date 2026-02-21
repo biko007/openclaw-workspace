@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "skills": {
+    "analyze": {
+      "version": "1.0.0",
+      "installedAt": 1771267283576
+    },
+    "daily-briefing": {
+      "version": "1.0.5",
+      "installedAt": 1771267383956
+    },
+    "email-best-practices": {
+      "version": "1.0.0",
+      "installedAt": 1771267391866
+    },
+    "executing-plans": {
+      "version": "0.1.0",
+      "installedAt": 1771267397579
+    }
+  }
+}

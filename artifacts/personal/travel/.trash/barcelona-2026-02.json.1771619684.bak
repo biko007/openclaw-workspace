@@ -1,0 +1,24 @@
+{
+  "id": "barcelona-2026-02",
+  "name": "Barcelona",
+  "destination": "Barcelona",
+  "country_code": "ES",
+  "start_date": "2026-02-23",
+  "end_date": "2026-02-26",
+  "climate": "temperate",
+  "activities": [
+    "leisure",
+    "beach",
+    "city"
+  ],
+  "segments": [],
+  "calendar_event_ids": [],
+  "created_at": "2026-02-20T20:23:47.467Z",
+  "updated_at": "2026-02-20T20:23:47.468Z",
+  "currency": "Euro (€)",
+  "visa_de": "kein Visum erforderlich (Schengen-Raum)",
+  "distance_km": 1243,
+  "travel_mode": "Flugzeug",
+  "door_to_door_estimate": "ca. 10-12 Stunden (Flug STR/ZRH + Transfers)",
+  "exchange_rate_eur": "1 EUR ≈ 1,00 EUR"
+}

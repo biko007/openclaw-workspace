@@ -1,0 +1,13 @@
+{
+  "id": "yahoo_faabcda973d1",
+  "createdAt": "2026-02-20T13:53:23.907Z",
+  "status": "sent",
+  "account": "yahoo",
+  "user": "jbickel2@yahoo.de",
+  "to": [
+    "test@example.com"
+  ],
+  "subject": "Test 30s Flow",
+  "bodyText": "Neue Version\n\nMit Update.",
+  "updatedAt": "2026-02-21T14:09:15.565Z"
+}

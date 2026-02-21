@@ -1,0 +1,12 @@
+{
+  "id": "yahoo_89dcfed9737b",
+  "createdAt": "2026-02-18T10:12:08.861Z",
+  "status": "sent",
+  "account": "yahoo",
+  "user": "jbickel2@yahoo.de",
+  "to": [
+    "jbickel2@protonmail.com"
+  ],
+  "subject": "Yahoo Test (Hans Dampf)",
+  "bodyText": "Hallo,\n\nDies ist eine Yahoo-Testmail.\n\n—\nMit freundlichem Gruß\nKI-Agent Hans Dampf\nim Auftrag von\nJürgen Bickel\n"
+}

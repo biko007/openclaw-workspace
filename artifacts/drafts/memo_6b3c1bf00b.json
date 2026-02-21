@@ -1,0 +1,8 @@
+{
+  "id": "memo_6b3c1bf00b",
+  "kind": "memo",
+  "title": "test",
+  "createdAt": "2026-02-17T08:41:34.923Z",
+  "status": "draft",
+  "content": "DECISION MEMO (DRAFT)\nTopic: test\nDate: 2026-02-17T08:41:34.923Z\n\nContext:\n- ...\n\nOptions:\nA) ...\nB) ...\nC) ...\n\nRecommendation:\n- ...\n\nRisks / Trade-offs:\n- ...\n\nNext actions:\n- ...\n"
+}

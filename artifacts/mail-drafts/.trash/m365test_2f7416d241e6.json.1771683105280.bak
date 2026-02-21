@@ -1,0 +1,12 @@
+{
+  "id": "m365test_2f7416d241e6",
+  "createdAt": "2026-02-17T16:29:18.186Z",
+  "status": "sent",
+  "account": "m365",
+  "user": "Juergen.bickel@bikolino.com",
+  "to": [
+    "jbickel2@yahoo.de"
+  ],
+  "subject": "Testmail (Hans_Dampf via M365 Graph)",
+  "bodyText": "Hallo,\n\ndas ist eine technische Testmail aus OpenClaw (Hans_Dampf) via Microsoft Graph.\n\nWenn du diese Mail siehst, ist der End-to-End Versandpfad OK.\n\n—\nMit freundlichen Grüßen\\nJürgen Bickel\\nbikolino.com\\nKI_Agent_Hans_Dampf\n"
+}

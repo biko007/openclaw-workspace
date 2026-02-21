@@ -1,0 +1,57 @@
+{
+  "id": "HAN",
+  "name": "Hannover FEB 2026 BvCW",
+  "destination": "Hannover",
+  "start_date": "2026-02-24",
+  "end_date": "2026-02-26",
+  "climate": "temperate",
+  "activities": [
+    "business"
+  ],
+  "segments": [],
+  "created_at": "2026-02-21T14:15:42.499Z",
+  "updated_at": "2026-02-21T14:28:21.224746Z",
+  "meta": {
+    "weather": {
+      "source": "open-meteo",
+      "fetched_at": "2026-02-21T14:28:21.224687Z",
+      "forecast_days": [
+        {
+          "date": "2026-02-21",
+          "tmin_c": 3.4,
+          "tmax_c": 10.1,
+          "precip_mm": 1.9,
+          "weathercode": 80
+        },
+        {
+          "date": "2026-02-22",
+          "tmin_c": 8.8,
+          "tmax_c": 11.3,
+          "precip_mm": 11.2,
+          "weathercode": 80
+        },
+        {
+          "date": "2026-02-23",
+          "tmin_c": 7.8,
+          "tmax_c": 10.2,
+          "precip_mm": 2.23,
+          "weathercode": 80
+        },
+        {
+          "date": "2026-02-24",
+          "tmin_c": 7.4,
+          "tmax_c": 12.5,
+          "precip_mm": 7.0,
+          "weathercode": 61
+        },
+        {
+          "date": "2026-02-25",
+          "tmin_c": 6.6,
+          "tmax_c": 16.5,
+          "precip_mm": 0.0,
+          "weathercode": 3
+        }
+      ]
+    }
+  }
+}

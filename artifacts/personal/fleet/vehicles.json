@@ -1,0 +1,14 @@
+[
+  {
+    "id": "v-1c31e6",
+    "type": "car",
+    "name": "Model X",
+    "make": "Model",
+    "model": "X",
+    "year": 2016,
+    "serviceLog": [],
+    "documents": [],
+    "createdAt": "2026-02-22T11:59:24.455Z",
+    "updatedAt": "2026-02-22T11:59:24.455Z"
+  }
+]

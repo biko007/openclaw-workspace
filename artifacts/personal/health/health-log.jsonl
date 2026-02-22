@@ -104,3 +104,11 @@
 {"id":"1771616034497-ryie","timestamp":"2026-02-20T19:33:54.497Z","type":"activity","activity_type":"Aktivität (16)","duration_min":45,"steps":1126,"distance_m":839,"calories":213,"source":"withings"}
 {"id":"1771616034497-hhqx","timestamp":"2026-02-20T19:33:54.497Z","type":"activity","activity_type":"Aktivität (16)","duration_min":22,"steps":288,"distance_m":214,"calories":104,"source":"withings"}
 {"id":"1771616034497-6wr3","timestamp":"2026-02-20T19:33:54.497Z","type":"activity","activity_type":"Aktivität (16)","duration_min":71,"steps":2540,"distance_m":1892,"calories":337,"source":"withings"}
+{"id":"1771658006000-ysyr","timestamp":"2026-02-21T07:13:26.000Z","type":"weight","value":99.15,"unit":"kg","source":"withings"}
+{"id":"1771556400000-n39b","timestamp":"2026-02-20T03:00:00.000Z","type":"sleep","value":5.9,"unit":"h","deep_sleep_h":0,"rem_sleep_h":0,"light_sleep_h":0,"quality":57,"source":"withings"}
+{"id":"1771642800000-mch4","timestamp":"2026-02-21T03:00:00.000Z","type":"sleep","value":0.6,"unit":"h","deep_sleep_h":0,"rem_sleep_h":0,"light_sleep_h":0,"quality":20,"source":"withings"}
+{"id":"1771729200000-scij","timestamp":"2026-02-22T03:00:00.000Z","type":"sleep","value":2.8,"unit":"h","deep_sleep_h":0,"rem_sleep_h":0,"light_sleep_h":0,"quality":41,"source":"withings"}
+{"id":"1771658006000-yzsz","timestamp":"2026-02-21T07:13:26.000Z","type":"weight","value":99.15,"unit":"kg","source":"withings"}
+{"id":"1771556400000-d1lb","timestamp":"2026-02-20T03:00:00.000Z","type":"sleep","value":5.9,"unit":"h","deep_sleep_h":0,"rem_sleep_h":0,"light_sleep_h":0,"quality":57,"source":"withings"}
+{"id":"1771642800000-2ufd","timestamp":"2026-02-21T03:00:00.000Z","type":"sleep","value":0.6,"unit":"h","deep_sleep_h":0,"rem_sleep_h":0,"light_sleep_h":0,"quality":20,"source":"withings"}
+{"id":"1771729200000-mkus","timestamp":"2026-02-22T03:00:00.000Z","type":"sleep","value":2.8,"unit":"h","deep_sleep_h":0,"rem_sleep_h":0,"light_sleep_h":0,"quality":41,"source":"withings"}

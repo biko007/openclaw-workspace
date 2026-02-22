@@ -3,12 +3,42 @@
     "id": "v-1c31e6",
     "type": "car",
     "name": "Model X",
-    "make": "Model",
-    "model": "X",
+    "make": "Tesla",
+    "model": "Model X",
     "year": 2016,
-    "serviceLog": [],
+    "serviceLog": [
+      {
+        "date": "2026-02-22",
+        "type": "TÜV/HU",
+        "mileage": 45000,
+        "cost": 120,
+        "notes": "Alle i.O."
+      }
+    ],
     "documents": [],
     "createdAt": "2026-02-22T11:59:24.455Z",
-    "updatedAt": "2026-02-22T11:59:24.455Z"
+    "updatedAt": "2026-02-22T13:03:53.440Z",
+    "mileage": 128103,
+    "plate": "TUT-ZZ58E",
+    "vin": "5YJXCCE43GFS01132",
+    "color": "Blau",
+    "tuevDate": "2028-02-21",
+    "insurance": {
+      "provider": "Gothaer Nr. 36.703.718613",
+      "type": "Vollkasko",
+      "annualCost": 1905
+    }
+  },
+  {
+    "id": "v-79a12c",
+    "type": "car",
+    "name": "Tesla Model Z",
+    "make": "Tesla",
+    "model": "Model Z",
+    "year": 2019,
+    "serviceLog": [],
+    "documents": [],
+    "createdAt": "2026-02-22T13:27:27.307Z",
+    "updatedAt": "2026-02-22T13:27:27.307Z"
   }
 ]

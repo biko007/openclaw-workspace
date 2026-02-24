@@ -1,0 +1,109 @@
+[
+  {
+    "id": "l19",
+    "label": "Leutenbergstr. 19",
+    "address": "Leutenbergstr. 19, 78532 Tuttlingen",
+    "type": "residential",
+    "owner": "personal",
+    "units": [
+      {
+        "id": "l19-w1",
+        "label": "W1 — EG links",
+        "floor": "EG",
+        "sqm": null,
+        "rentType": "permanent",
+        "tenant": "",
+        "lease": null,
+        "currentRent": null
+      },
+      {
+        "id": "l19-w2",
+        "label": "W2 — EG rechts",
+        "floor": "EG",
+        "sqm": null,
+        "rentType": "permanent",
+        "tenant": "",
+        "lease": null,
+        "currentRent": null
+      },
+      {
+        "id": "l19-w3",
+        "label": "W3 — OG links",
+        "floor": "OG",
+        "sqm": null,
+        "rentType": "temporary",
+        "tenant": "",
+        "lease": null,
+        "currentRent": null
+      },
+      {
+        "id": "l19-w4",
+        "label": "W4+ — OG rechts",
+        "floor": "OG",
+        "sqm": null,
+        "rentType": "temporary",
+        "tenant": "",
+        "lease": null,
+        "currentRent": null
+      }
+    ],
+    "distributionKeys": [
+      {
+        "id": "l19-miteigentumsanteil",
+        "label": "Miteigentumsanteil",
+        "values": {
+          "l19-w1": 25,
+          "l19-w2": 25,
+          "l19-w3": 25,
+          "l19-w4": 25
+        }
+      }
+    ],
+    "createdAt": "2026-02-24T16:42:18.875Z",
+    "updatedAt": "2026-02-24T16:42:18.875Z"
+  },
+  {
+    "id": "mg24",
+    "label": "Marktgasse 24",
+    "address": "Marktgasse 24, 78532 Tuttlingen",
+    "type": "residential",
+    "owner": "personal",
+    "units": [],
+    "distributionKeys": [],
+    "createdAt": "2026-02-24T16:42:18.875Z",
+    "updatedAt": "2026-02-24T16:42:18.875Z"
+  },
+  {
+    "id": "d4",
+    "label": "Daimlerstr. 4",
+    "address": "Daimlerstr. 4, 78573 Wurmlingen",
+    "type": "commercial",
+    "owner": "personal",
+    "units": [
+      {
+        "id": "d4-h1",
+        "label": "Halle",
+        "floor": "EG",
+        "sqm": null,
+        "rentType": "permanent",
+        "tenant": "",
+        "lease": null,
+        "currentRent": null
+      }
+    ],
+    "distributionKeys": [],
+    "createdAt": "2026-02-24T16:42:18.875Z",
+    "updatedAt": "2026-02-24T16:42:18.875Z"
+  },
+  {
+    "id": "n24",
+    "label": "Nonnenburgstr. 24",
+    "address": "Nonnenburgstr. 24, 78532 Tuttlingen",
+    "type": "residential",
+    "owner": "laperlgmbh",
+    "units": [],
+    "distributionKeys": [],
+    "createdAt": "2026-02-24T16:42:18.875Z",
+    "updatedAt": "2026-02-24T16:42:18.875Z"
+  }
+]

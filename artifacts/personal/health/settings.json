@@ -1,4 +1,10 @@
 {
   "briefingTime": "07:00",
-  "telegramChatId": "133260792"
+  "telegramChatId": "133260792",
+  "location": {
+    "lat": 50.1063437149425,
+    "lon": 8.663106624125492,
+    "label": "Frankfurt am Main",
+    "updatedAt": "2026-02-26T08:21:54.220Z"
+  }
 }

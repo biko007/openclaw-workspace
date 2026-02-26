@@ -34,5 +34,17 @@
     "spDriveId": "b!htEyqVpOcEmALnLMiYvEAAozBMOC5kJPtaEuNMEFcIT6iCxQaA4ZSIK_SNkppk2W",
     "spName": "2016-11-30_ZOLL Steuerbefreiung Model X.pdf",
     "spWebUrl": "https://bikolino.sharepoint.com/sites/dms/Freigegebene%20Dokumente/Scans/2016-11-30_ZOLL%20Steuerbefreiung%20Model%20X.pdf"
+  },
+  {
+    "id": "lnk-f4c2fb",
+    "entityType": "trip",
+    "entityId": "HAN",
+    "docType": "sharepoint",
+    "spItemId": "bikolino.sharepoint.com,a932d186-4e5a-4970-802e-72cc898bc400,c304330a-e682-4f42-b5a1-2e34c1057084::b!htEyqVpOcEmALnLMiYvEAAozBMOC5kJPtaEuNMEFcIT6iCxQaA4ZSIK_SNkppk2W::Scans/DB_Ticket_333224892960.pdf",
+    "spDriveId": "b!htEyqVpOcEmALnLMiYvEAAozBMOC5kJPtaEuNMEFcIT6iCxQaA4ZSIK_SNkppk2W",
+    "spName": "DB_Ticket_333224892960.pdf",
+    "spWebUrl": "https://bikolino.sharepoint.com/sites/dms/Freigegebene%20Dokumente/Scans/DB_Ticket_333224892960.pdf",
+    "label": "DB Ticket",
+    "createdAt": "2026-02-23T17:03:42.404008Z"
   }
 ]

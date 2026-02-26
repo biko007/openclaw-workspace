@@ -288,3 +288,7 @@
 {"id": "1771556400000-0uob", "timestamp": "2026-02-20T03:00:00.000Z", "type": "sleep", "value": 7.9, "unit": "h", "deep_sleep_h": 1.8, "rem_sleep_h": 1.1, "light_sleep_h": 5, "quality": 52, "source": "withings"}
 {"id": "1771642800000-mzjw", "timestamp": "2026-02-21T03:00:00.000Z", "type": "sleep", "value": 6.5, "unit": "h", "deep_sleep_h": 2.4, "rem_sleep_h": 0.8, "light_sleep_h": 3.4, "quality": 40, "source": "withings"}
 {"id": "1771729200000-x8u0", "timestamp": "2026-02-22T03:00:00.000Z", "type": "sleep", "value": 6.4, "unit": "h", "deep_sleep_h": 1.8, "rem_sleep_h": 1.1, "light_sleep_h": 3.5, "quality": 68, "source": "withings"}
+{"id":"1771823003000-6h3t","timestamp":"2026-02-23T05:03:23.000Z","type":"weight","value":99.82,"unit":"kg","source":"withings"}
+{"id":"1771815600000-74rq","timestamp":"2026-02-23T03:00:00.000Z","type":"sleep","value":6.3,"unit":"h","deep_sleep_h":2.1,"rem_sleep_h":0,"light_sleep_h":4.2,"quality":71,"source":"withings"}
+{"id":"1771902000000-v4nw","timestamp":"2026-02-24T03:00:00.000Z","type":"sleep","value":6.5,"unit":"h","deep_sleep_h":2.3,"rem_sleep_h":0.2,"light_sleep_h":4,"quality":77,"source":"withings"}
+{"id":"1771914589000-ih0l","timestamp":"2026-02-24T06:29:49.000Z","type":"weight","value":97.83,"unit":"kg","source":"withings"}

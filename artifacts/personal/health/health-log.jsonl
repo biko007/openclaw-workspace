@@ -292,3 +292,5 @@
 {"id":"1771815600000-74rq","timestamp":"2026-02-23T03:00:00.000Z","type":"sleep","value":6.3,"unit":"h","deep_sleep_h":2.1,"rem_sleep_h":0,"light_sleep_h":4.2,"quality":71,"source":"withings"}
 {"id":"1771902000000-v4nw","timestamp":"2026-02-24T03:00:00.000Z","type":"sleep","value":6.5,"unit":"h","deep_sleep_h":2.3,"rem_sleep_h":0.2,"light_sleep_h":4,"quality":77,"source":"withings"}
 {"id":"1771914589000-ih0l","timestamp":"2026-02-24T06:29:49.000Z","type":"weight","value":97.83,"unit":"kg","source":"withings"}
+{"id":"1772177179000-1ch6","timestamp":"2026-02-27T07:26:19.000Z","type":"weight","value":98.23,"unit":"kg","source":"withings"}
+{"id":"1772161200000-x2u4","timestamp":"2026-02-27T03:00:00.000Z","type":"sleep","value":9.1,"unit":"h","deep_sleep_h":2.8,"rem_sleep_h":2.2,"light_sleep_h":4.2,"quality":85,"source":"withings"}

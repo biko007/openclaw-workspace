@@ -294,3 +294,13 @@
 {"id":"1771914589000-ih0l","timestamp":"2026-02-24T06:29:49.000Z","type":"weight","value":97.83,"unit":"kg","source":"withings"}
 {"id":"1772177179000-1ch6","timestamp":"2026-02-27T07:26:19.000Z","type":"weight","value":98.23,"unit":"kg","source":"withings"}
 {"id":"1772161200000-x2u4","timestamp":"2026-02-27T03:00:00.000Z","type":"sleep","value":9.1,"unit":"h","deep_sleep_h":2.8,"rem_sleep_h":2.2,"light_sleep_h":4.2,"quality":85,"source":"withings"}
+{"id":"1772260316000-g6xa","timestamp":"2026-02-28T06:31:56.000Z","type":"weight","value":98.93,"unit":"kg","source":"withings"}
+{"id":"1772260316000-6jlm","timestamp":"2026-02-28T06:31:56.000Z","type":"body_fat","value":32.2,"unit":"%","source":"withings"}
+{"id":"1772260316000-2ic0","timestamp":"2026-02-28T06:31:56.000Z","type":"heartrate","hr_avg":83,"source":"withings"}
+{"id":"1772348367000-m061","timestamp":"2026-03-01T06:59:27.000Z","type":"weight","value":99.35,"unit":"kg","source":"withings"}
+{"id":"1772348367000-6jn4","timestamp":"2026-03-01T06:59:27.000Z","type":"body_fat","value":31.2,"unit":"%","source":"withings"}
+{"id":"1772348367000-adcl","timestamp":"2026-03-01T06:59:27.000Z","type":"heartrate","hr_avg":88,"source":"withings"}
+{"id":"1772428033000-wlzn","timestamp":"2026-03-02T05:07:13.000Z","type":"weight","value":99.25,"unit":"kg","source":"withings"}
+{"id":"1772420400000-9v4a","timestamp":"2026-03-02T03:00:00.000Z","type":"sleep","value":6.7,"unit":"h","deep_sleep_h":2.6,"rem_sleep_h":1.2,"light_sleep_h":2.9,"quality":76,"source":"withings"}
+{"id":"1772517606000-1caa","timestamp":"2026-03-03T06:00:06.000Z","type":"weight","value":97.99,"unit":"kg","source":"withings"}
+{"id":"1772506800000-pri6","timestamp":"2026-03-03T03:00:00.000Z","type":"sleep","value":7,"unit":"h","deep_sleep_h":1,"rem_sleep_h":2.4,"light_sleep_h":3.7,"quality":88,"source":"withings"}

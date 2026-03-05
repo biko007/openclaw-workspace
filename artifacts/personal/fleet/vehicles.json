@@ -28,5 +28,20 @@
       "type": "Vollkasko",
       "annualCost": 1905
     }
+  },
+  {
+    "id": "v-mercdes-benz-g-580-g-klasse",
+    "type": "car",
+    "name": "Claudias",
+    "plate": "TUT-ZZ70E",
+    "make": "Mercdes-Benz",
+    "model": "G 580 G-Klasse",
+    "year": 2025,
+    "color": "Kalaharigold",
+    "mileage": 9366,
+    "serviceLog": [],
+    "documents": [],
+    "createdAt": "2026-03-04T14:44:11.836Z",
+    "updatedAt": "2026-03-04T14:44:11.836Z"
   }
 ]

@@ -97,6 +97,22 @@ app.get("/strategies", (_req, res) => {
   res.json(loadStrategies());
 });
 
+app.get("/mode", (_req, res) => {
+  res.json({ mode: currentStatus.mode });
+});
+
+app.post("/mode", (req, res) => {
+  const mode = Number(req.body?.mode);
+  if (![1, 2, 3].includes(mode)) {
+    res.status(400).json({ error: "mode must be 1, 2, or 3" });
+    return;
+  }
+  currentStatus.mode = mode as 1 | 2 | 3;
+  saveStatus(currentStatus);
+  const labels: Record<number, string> = { 1: "Monitoring", 2: "Semi-Auto", 3: "Full-Auto" };
+  res.json({ mode, label: labels[mode] });
+});
+
 // ── Universe Endpoints ──
 
 app.get("/universe", (_req, res) => {
@@ -134,20 +150,37 @@ app.get("/universe/scan", (_req, res) => {
   res.json(loadRecentScanResults(50));
 });
 
-app.post("/universe/scan", async (_req, res) => {
-  try {
-    const data = await universeManager.buildActiveUniverse();
-    const momentum = await universeManager.scanMomentum();
-    const meanRev = await universeManager.scanMeanReversion();
-    res.json({
-      universe: data.symbols.length,
-      momentum: momentum.length,
-      meanReversion: meanRev.length,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
+let lastScanResult: { universe: number; momentum: number; meanReversion: number; timestamp: string; status: string } = { universe: 0, momentum: 0, meanReversion: 0, timestamp: "", status: "idle" };
+
+app.post("/universe/scan", (_req, res) => {
+  if (lastScanResult.status === "running") {
+    res.json({ ...lastScanResult, message: "Scan läuft bereits" });
+    return;
   }
+  lastScanResult = { universe: 0, momentum: 0, meanReversion: 0, timestamp: new Date().toISOString(), status: "running" };
+  res.json({ ...lastScanResult, message: "Scan gestartet" });
+
+  (async () => {
+    try {
+      const data = await universeManager.buildActiveUniverse();
+      const momentum = await universeManager.scanMomentum();
+      const meanRev = await universeManager.scanMeanReversion();
+      lastScanResult = {
+        universe: data.symbols.length,
+        momentum: momentum.length,
+        meanReversion: meanRev.length,
+        timestamp: new Date().toISOString(),
+        status: "done",
+      };
+    } catch (e) {
+      lastScanResult = { universe: 0, momentum: 0, meanReversion: 0, timestamp: new Date().toISOString(), status: "error" };
+      console.error("[trading-agent] Scan error:", e);
+    }
+  })();
+});
+
+app.get("/universe/scan/status", (_req, res) => {
+  res.json(lastScanResult);
 });
 
 app.get("/universe/top", (_req, res) => {

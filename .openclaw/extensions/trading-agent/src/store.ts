@@ -30,10 +30,18 @@ export interface WatchlistItem {
   lastUpdate?: string;
 }
 
+export interface StrategyEntry {
+  enabled: boolean;
+  maxPositionSizePercent: number;
+  stopLossPercent: number;
+}
+
 export interface StrategyConfig {
-  momentum: { enabled: boolean; maxPositionSize: number; stopLossPercent: number };
-  meanReversion: { enabled: boolean; maxPositionSize: number; stopLossPercent: number };
-  newsTrading: { enabled: boolean; maxPositionSize: number; stopLossPercent: number };
+  momentum: StrategyEntry;
+  meanReversion: StrategyEntry;
+  newsTrading: StrategyEntry;
+  maxOpenPositions: number;
+  dailyLossLimit: { enabled: boolean; maxLossPercent: number };
 }
 
 export interface OrderRecord {
@@ -131,9 +139,11 @@ export function removeFromWatchlist(symbol: string): WatchlistItem[] {
 const STRATEGIES_PATH = join(BASE, "strategies.json");
 
 const DEFAULT_STRATEGIES: StrategyConfig = {
-  momentum: { enabled: false, maxPositionSize: 5000, stopLossPercent: 5 },
-  meanReversion: { enabled: false, maxPositionSize: 5000, stopLossPercent: 5 },
-  newsTrading: { enabled: false, maxPositionSize: 5000, stopLossPercent: 5 },
+  momentum: { enabled: true, maxPositionSizePercent: 20, stopLossPercent: 3 },
+  meanReversion: { enabled: true, maxPositionSizePercent: 20, stopLossPercent: 3 },
+  newsTrading: { enabled: true, maxPositionSizePercent: 20, stopLossPercent: 3 },
+  maxOpenPositions: 10,
+  dailyLossLimit: { enabled: false, maxLossPercent: 5 },
 };
 
 export function loadStrategies(): StrategyConfig {

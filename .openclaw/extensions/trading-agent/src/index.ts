@@ -23,38 +23,32 @@ const POLL_INTERVAL = 30_000;
 
 const ibkr = new IBKRConnection();
 const universeManager = new UniverseManager(ibkr);
-let currentStatus: TradingStatus = defaultStatus();
+let currentStatus: TradingStatus = loadStatus();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 // ── Polling ──
 
 async function pollIBKR(): Promise<void> {
   const connected = ibkr.isConnected();
-  const positions = connected ? await ibkr.reqPositions() : [];
-  const account = connected ? await ibkr.reqAccountSummary() : {
-    netLiquidation: 0,
-    cashBalance: 0,
-    unrealizedPnl: 0,
-    realizedPnl: 0,
-    dailyPnl: 0,
-  };
+  const positions = connected ? await ibkr.reqPositions() : currentStatus.positions;
+  const account = connected ? await ibkr.reqAccountSummary() : null;
 
   currentStatus = {
-    mode: 1,
+    ...currentStatus,
     connected,
     paperMode: true,
-    account: ibkr.getAccount(),
+    account: ibkr.getAccount() || currentStatus.account,
     positions,
-    dailyPnl: account.dailyPnl,
-    unrealizedPnl: account.unrealizedPnl,
-    realizedPnl: account.realizedPnl,
-    netLiquidation: account.netLiquidation,
-    cashBalance: account.cashBalance,
+    dailyPnl: account?.dailyPnl ?? currentStatus.dailyPnl,
+    unrealizedPnl: account?.unrealizedPnl ?? currentStatus.unrealizedPnl,
+    realizedPnl: account?.realizedPnl ?? currentStatus.realizedPnl,
+    netLiquidation: account?.netLiquidation ?? currentStatus.netLiquidation,
+    cashBalance: account?.cashBalance ?? currentStatus.cashBalance,
     timestamp: new Date().toISOString(),
   };
 
   saveStatus(currentStatus);
-  recordDailyPerformance(currentStatus);
+  if (connected) recordDailyPerformance(currentStatus);
 }
 
 // ── Express ──
@@ -67,6 +61,8 @@ app.get("/health", (_req, res) => {
 });
 
 app.get("/status", (_req, res) => {
+  // Always return live connection state
+  currentStatus.connected = ibkr.isConnected();
   res.json(currentStatus);
 });
 
@@ -150,13 +146,15 @@ app.get("/universe/scan", (_req, res) => {
   res.json(loadRecentScanResults(50));
 });
 
-let lastScanResult: { universe: number; momentum: number; meanReversion: number; timestamp: string; status: string } = { universe: 0, momentum: 0, meanReversion: 0, timestamp: "", status: "idle" };
+let scanRunning = false;
+let lastScanResult = { universe: 0, momentum: 0, meanReversion: 0, timestamp: "", status: "idle" };
 
 app.post("/universe/scan", (_req, res) => {
-  if (lastScanResult.status === "running") {
-    res.json({ ...lastScanResult, message: "Scan läuft bereits" });
+  if (scanRunning) {
+    res.json({ ...lastScanResult, status: "running", message: "Scan läuft bereits" });
     return;
   }
+  scanRunning = true;
   lastScanResult = { universe: 0, momentum: 0, meanReversion: 0, timestamp: new Date().toISOString(), status: "running" };
   res.json({ ...lastScanResult, message: "Scan gestartet" });
 
@@ -172,15 +170,18 @@ app.post("/universe/scan", (_req, res) => {
         timestamp: new Date().toISOString(),
         status: "done",
       };
+      console.log(`[trading-agent] Scan complete: ${data.symbols.length} symbols, ${momentum.length} momentum, ${meanRev.length} meanRev`);
     } catch (e) {
       lastScanResult = { universe: 0, momentum: 0, meanReversion: 0, timestamp: new Date().toISOString(), status: "error" };
       console.error("[trading-agent] Scan error:", e);
+    } finally {
+      scanRunning = false;
     }
   })();
 });
 
 app.get("/universe/scan/status", (_req, res) => {
-  res.json(lastScanResult);
+  res.json({ ...lastScanResult, status: scanRunning ? "running" : lastScanResult.status });
 });
 
 app.get("/universe/top", (_req, res) => {

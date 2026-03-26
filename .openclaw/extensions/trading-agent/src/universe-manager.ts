@@ -1,3 +1,4 @@
+import YahooFinance from "yahoo-finance2";
 import { IBKRConnection, type ScannerResult } from "./ibkr.js";
 import { CONSTITUENT_MAP } from "./constituents.js";
 import {
@@ -18,6 +19,11 @@ const INDEX_SCANNER_CONFIG: Record<string, { locationCode: string; currency: str
   SP500: { locationCode: "STK.US.MAJOR", currency: "USD" },
   NASDAQ100: { locationCode: "STK.US.MAJOR", currency: "USD" },
 };
+
+const yahooFinance = new YahooFinance({
+  validation: { logErrors: false },
+  suppressNotices: ["yahooSurvey"],
+});
 
 export class UniverseManager {
   private ibkr: IBKRConnection;
@@ -73,42 +79,9 @@ export class UniverseManager {
     return data;
   }
 
-  async loadIndexComponents(indexName: string, config: UniverseConfig): Promise<UniverseSymbol[]> {
-    const scannerCfg = INDEX_SCANNER_CONFIG[indexName];
-    if (!scannerCfg) return this.fallbackComponents(indexName);
-
-    const indexCfg = config.indices[indexName];
-    if (!this.ibkr.isConnected()) {
-      console.log(`[universe] IBKR not connected, using fallback for ${indexName}`);
-      return this.fallbackComponents(indexName);
-    }
-
-    try {
-      const results = await this.ibkr.reqScannerSubscription({
-        instrument: "STK",
-        locationCode: scannerCfg.locationCode,
-        scanCode: "MARKET_CAP_USD_DESC",
-        numberOfRows: indexName === "DAX40" || indexName === "MDAX" ? 50 : 100,
-        abovePrice: 5,
-      });
-
-      if (results.length === 0) {
-        console.log(`[universe] Scanner returned 0 results for ${indexName}, using fallback`);
-        return this.fallbackComponents(indexName);
-      }
-
-      return results.map((r) => ({
-        symbol: r.symbol,
-        exchange: r.exchange || indexCfg?.exchange || scannerCfg.locationCode,
-        currency: r.currency || indexCfg?.currency || scannerCfg.currency,
-        marketCap: 0,
-        avgVolume: 0,
-        index: indexName,
-      }));
-    } catch (e) {
-      console.log(`[universe] Scanner error for ${indexName}:`, e);
-      return this.fallbackComponents(indexName);
-    }
+  async loadIndexComponents(indexName: string, _config: UniverseConfig): Promise<UniverseSymbol[]> {
+    // IBKR scanner is disabled on paper accounts - use static constituent lists directly
+    return this.fallbackComponents(indexName);
   }
 
   private fallbackComponents(indexName: string): UniverseSymbol[] {
@@ -125,87 +98,110 @@ export class UniverseManager {
     }));
   }
 
+  // ── Yahoo Finance Quote Fetching ──
+
+  private async fetchYahooQuotes(symbols: UniverseSymbol[]): Promise<Map<string, { changePct: number; volume: number; price: number }>> {
+    const quotes = new Map<string, { changePct: number; volume: number; price: number }>();
+    // Yahoo tickers: EU stocks need exchange suffix
+    const tickerMap = new Map<string, string>(); // yahoo ticker → original symbol
+    for (const s of symbols) {
+      let ticker = s.symbol;
+      if (s.currency === "EUR") {
+        // XETRA stocks: append .DE
+        ticker = `${s.symbol}.DE`;
+      }
+      tickerMap.set(ticker, s.symbol);
+    }
+
+    const tickers = Array.from(tickerMap.keys());
+    // Batch in chunks of 40 to avoid rate limits
+    const CHUNK = 40;
+    for (let i = 0; i < tickers.length; i += CHUNK) {
+      const chunk = tickers.slice(i, i + CHUNK);
+      try {
+        const results: any = await yahooFinance.quote(chunk);
+        const arr: any[] = Array.isArray(results) ? results : [results];
+        for (const q of arr) {
+          if (!q || !q.symbol) continue;
+          const origSymbol = tickerMap.get(q.symbol) || q.symbol.replace(/\.DE$/, "");
+          const changePct: number = q.regularMarketChangePercent ?? 0;
+          const volume: number = q.regularMarketVolume ?? 0;
+          const price: number = q.regularMarketPrice ?? 0;
+          quotes.set(origSymbol, { changePct, volume, price });
+        }
+      } catch (e) {
+        console.log(`[universe] Yahoo quote batch error (chunk ${i}):`, e instanceof Error ? e.message : e);
+      }
+      // Small delay between chunks
+      if (i + CHUNK < tickers.length) {
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+
+    return quotes;
+  }
+
   // ── Intraday Scanners ──
 
   async scanMomentum(): Promise<ScanResult[]> {
     const universe = loadUniverse();
     if (universe.symbols.length === 0) return [];
-    const universeSet = new Set(universe.symbols.map((s) => s.symbol));
     const results: ScanResult[] = [];
 
-    for (const location of ["STK.US.MAJOR", "STK.EU.IBIS-XETRA"]) {
-      if (!this.ibkr.isConnected()) break;
-      try {
-        const gainers = await this.ibkr.reqScannerSubscription({
-          instrument: "STK",
-          locationCode: location,
-          scanCode: "TOP_PERC_GAIN",
-          numberOfRows: 30,
-          abovePrice: 5,
-          aboveVolume: 100_000,
-        });
+    try {
+      const quotes = await this.fetchYahooQuotes(universe.symbols);
+      // Sort by % change descending → top gainers = momentum
+      const sorted = Array.from(quotes.entries())
+        .filter(([, q]) => q.changePct > 1.0 && q.volume > 50_000 && q.price > 5)
+        .sort((a, b) => b[1].changePct - a[1].changePct)
+        .slice(0, 20);
 
-        for (const r of gainers) {
-          if (universeSet.has(r.symbol)) {
-            const sr: ScanResult = {
-              symbol: r.symbol,
-              signal: "MOMENTUM_UP",
-              strength: 30 - r.rank,
-              timestamp: new Date().toISOString(),
-            };
-            results.push(sr);
-            appendScanResult(sr);
-          }
-        }
-      } catch (e) {
-        console.log(`[universe] Momentum scan error (${location}):`, e);
+      for (const [symbol, q] of sorted) {
+        const sr: ScanResult = {
+          symbol,
+          signal: "MOMENTUM_UP",
+          strength: Math.round(q.changePct * 10) / 10,
+          timestamp: new Date().toISOString(),
+        };
+        results.push(sr);
+        appendScanResult(sr);
       }
+    } catch (e) {
+      console.log("[universe] Yahoo momentum scan error:", e instanceof Error ? e.message : e);
     }
 
-    if (results.length > 0) {
-      console.log(`[universe] Momentum scan: ${results.length} signals`);
-    }
+    console.log(`[universe] Momentum scan: ${results.length} signals (Yahoo Finance)`);
     return results;
   }
 
   async scanMeanReversion(): Promise<ScanResult[]> {
     const universe = loadUniverse();
     if (universe.symbols.length === 0) return [];
-    const universeSet = new Set(universe.symbols.map((s) => s.symbol));
     const results: ScanResult[] = [];
 
-    for (const location of ["STK.US.MAJOR", "STK.EU.IBIS-XETRA"]) {
-      if (!this.ibkr.isConnected()) break;
-      try {
-        const losers = await this.ibkr.reqScannerSubscription({
-          instrument: "STK",
-          locationCode: location,
-          scanCode: "TOP_PERC_LOSE",
-          numberOfRows: 30,
-          abovePrice: 5,
-          aboveVolume: 100_000,
-        });
+    try {
+      const quotes = await this.fetchYahooQuotes(universe.symbols);
+      // Sort by % change ascending → top losers = mean reversion candidates
+      const sorted = Array.from(quotes.entries())
+        .filter(([, q]) => q.changePct < -1.0 && q.volume > 50_000 && q.price > 5)
+        .sort((a, b) => a[1].changePct - b[1].changePct)
+        .slice(0, 20);
 
-        for (const r of losers) {
-          if (universeSet.has(r.symbol)) {
-            const sr: ScanResult = {
-              symbol: r.symbol,
-              signal: "MEAN_REVERSION",
-              strength: 30 - r.rank,
-              timestamp: new Date().toISOString(),
-            };
-            results.push(sr);
-            appendScanResult(sr);
-          }
-        }
-      } catch (e) {
-        console.log(`[universe] Mean reversion scan error (${location}):`, e);
+      for (const [symbol, q] of sorted) {
+        const sr: ScanResult = {
+          symbol,
+          signal: "MEAN_REVERSION",
+          strength: Math.round(Math.abs(q.changePct) * 10) / 10,
+          timestamp: new Date().toISOString(),
+        };
+        results.push(sr);
+        appendScanResult(sr);
       }
+    } catch (e) {
+      console.log("[universe] Yahoo mean reversion scan error:", e instanceof Error ? e.message : e);
     }
 
-    if (results.length > 0) {
-      console.log(`[universe] Mean reversion scan: ${results.length} signals`);
-    }
+    console.log(`[universe] Mean reversion scan: ${results.length} signals (Yahoo Finance)`);
     return results;
   }
 
@@ -244,9 +240,7 @@ export class UniverseManager {
       this.lastBuildHour = -1;
     }
 
-    // Intraday scans only during market hours and if connected
-    if (!this.ibkr.isConnected()) return;
-
+    // Intraday scans during market hours (Yahoo Finance doesn't need IBKR connection)
     const euOpen = utcHour >= 7 && (utcHour < 15 || (utcHour === 15 && utcMin <= 30));
     const usOpen = utcHour >= 14 && (utcHour < 21 || (utcHour === 20 && utcMin <= 59));
     const marketOpen = euOpen || usOpen;

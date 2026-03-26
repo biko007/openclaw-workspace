@@ -5,9 +5,13 @@ import {
   Contract,
   SecType,
   ErrorCode,
+  OrderAction,
+  OrderType,
   type TickType,
   type ContractDetails,
   type ScannerSubscription,
+  type Order,
+  type OrderState,
 } from "@stoqey/ib";
 
 export interface Position {
@@ -38,6 +42,18 @@ export interface ScannerResult {
   secType: string;
 }
 
+export interface OrderResult {
+  orderId: number;
+  symbol: string;
+  action: "BUY" | "SELL";
+  quantity: number;
+  orderType: string;
+  limitPrice?: number;
+  stopPrice?: number;
+  status: string;
+  parentId?: number;
+}
+
 export interface MarketQuote {
   symbol: string;
   last: number;
@@ -60,6 +76,7 @@ export class IBKRConnection extends EventEmitter {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
   private nextReqId = 1000;
+  private _nextOrderId = 0;
   private account = "";
 
   constructor() {
@@ -119,6 +136,10 @@ export class IBKRConnection extends EventEmitter {
       this.api.on(EventName.managedAccounts, (accountsList: string) => {
         this.account = accountsList.split(",")[0] || "";
         this.emit("account", this.account);
+      });
+
+      this.api.on(EventName.nextValidId, (orderId: number) => {
+        this._nextOrderId = orderId;
       });
 
       this.api.connect();
@@ -374,6 +395,145 @@ export class IBKRConnection extends EventEmitter {
       };
 
       this.api.reqScannerSubscription(reqId, subscription);
+    });
+  }
+
+  // ── Order Placement ──
+
+  private getNextOrderId(): number {
+    return this._nextOrderId++;
+  }
+
+  /**
+   * Place a bracket order: LIMIT BUY + STOP SELL (stop-loss).
+   * Returns both order results.
+   */
+  async placeBracketOrder(params: {
+    symbol: string;
+    exchange: string;
+    currency: string;
+    quantity: number;
+    limitPrice: number;
+    stopPrice: number;
+  }): Promise<{ entry: OrderResult; stopLoss: OrderResult }> {
+    if (!this.api || !this.isConnected()) {
+      throw new Error("IBKR not connected");
+    }
+
+    const contract: Contract = {
+      symbol: params.symbol,
+      secType: SecType.STK,
+      exchange: params.exchange || "SMART",
+      currency: params.currency || "USD",
+    };
+
+    const parentId = this.getNextOrderId();
+    const childId = this.getNextOrderId();
+
+    // Parent: LIMIT BUY
+    const parentOrder: Order = {
+      orderId: parentId,
+      action: OrderAction.BUY,
+      orderType: OrderType.LMT,
+      totalQuantity: params.quantity,
+      lmtPrice: params.limitPrice,
+      transmit: false, // don't transmit until child is attached
+    };
+
+    // Child: STOP SELL (stop-loss)
+    const childOrder: Order = {
+      orderId: childId,
+      action: OrderAction.SELL,
+      orderType: OrderType.STP,
+      totalQuantity: params.quantity,
+      auxPrice: params.stopPrice,
+      parentId,
+      transmit: true, // transmit both orders together
+    };
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve({
+          entry: {
+            orderId: parentId,
+            symbol: params.symbol,
+            action: "BUY",
+            quantity: params.quantity,
+            orderType: "LMT",
+            limitPrice: params.limitPrice,
+            status: "Submitted",
+          },
+          stopLoss: {
+            orderId: childId,
+            symbol: params.symbol,
+            action: "SELL",
+            quantity: params.quantity,
+            orderType: "STP",
+            stopPrice: params.stopPrice,
+            status: "PreSubmitted",
+            parentId,
+          },
+        });
+      }, 5_000);
+
+      const results = new Map<number, string>();
+
+      const onOrderStatus = (
+        orderId: number,
+        status: string,
+      ) => {
+        if (orderId === parentId || orderId === childId) {
+          results.set(orderId, status);
+          if (results.size >= 2) {
+            clearTimeout(timeout);
+            cleanup();
+            resolve({
+              entry: {
+                orderId: parentId,
+                symbol: params.symbol,
+                action: "BUY",
+                quantity: params.quantity,
+                orderType: "LMT",
+                limitPrice: params.limitPrice,
+                status: results.get(parentId) || "Submitted",
+              },
+              stopLoss: {
+                orderId: childId,
+                symbol: params.symbol,
+                action: "SELL",
+                quantity: params.quantity,
+                orderType: "STP",
+                stopPrice: params.stopPrice,
+                status: results.get(childId) || "PreSubmitted",
+                parentId,
+              },
+            });
+          }
+        }
+      };
+
+      const onError = (err: Error, code: ErrorCode, id: number) => {
+        if (id === parentId || id === childId) {
+          clearTimeout(timeout);
+          cleanup();
+          reject(new Error(`Order ${id} error (${code}): ${err.message}`));
+        }
+      };
+
+      const cleanup = () => {
+        (this.api as any)?.removeListener(EventName.orderStatus, onOrderStatus);
+        (this.api as any)?.removeListener(EventName.error, onError);
+      };
+
+      this.api!.on(EventName.orderStatus, onOrderStatus);
+      this.api!.on(EventName.error, onError);
+
+      // Place both orders
+      this.api!.placeOrder(parentId, contract, parentOrder);
+      this.api!.placeOrder(childId, contract, childOrder);
+
+      console.log(`[ibkr] Bracket order placed: BUY ${params.quantity} ${params.symbol} @ ${params.limitPrice} | STP @ ${params.stopPrice}`);
     });
   }
 

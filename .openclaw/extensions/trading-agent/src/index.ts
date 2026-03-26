@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import express from "express";
 import { IBKRConnection } from "./ibkr.js";
 import { UniverseManager } from "./universe-manager.js";
+import { OrderExecutor } from "./executor.js";
 import {
   loadStatus,
   saveStatus,
@@ -9,6 +12,7 @@ import {
   addToWatchlist,
   removeFromWatchlist,
   loadStrategies,
+  loadOrders,
   recordDailyPerformance,
   loadUniverse,
   loadUniverseConfig,
@@ -21,8 +25,52 @@ const PORT = 18793;
 const BIND = "127.0.0.1";
 const POLL_INTERVAL = 30_000;
 
+// ── Telegram notification ──
+
+function loadTelegramConfig(): { botToken: string; chatId: string } {
+  try {
+    const cfgPath = join(process.env.HOME || "/home/biko", ".openclaw/openclaw.json");
+    const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
+    const botToken = cfg?.channels?.telegram?.botToken || "";
+    // Chat ID from health settings or env
+    const chatId = process.env.TELEGRAM_CHAT_ID || "133260792";
+    return { botToken, chatId };
+  } catch {
+    return { botToken: "", chatId: "" };
+  }
+}
+
+const telegramCfg = loadTelegramConfig();
+
+async function sendTelegramNotification(text: string): Promise<void> {
+  if (!telegramCfg.botToken || !telegramCfg.chatId) {
+    console.log("[trading-agent] No Telegram config, notification skipped");
+    return;
+  }
+  try {
+    const resp = await fetch(`https://api.telegram.org/bot${telegramCfg.botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: telegramCfg.chatId,
+        text,
+        parse_mode: "Markdown",
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!resp.ok) {
+      console.log(`[trading-agent] Telegram send failed: ${resp.status}`);
+    }
+  } catch (e) {
+    console.log("[trading-agent] Telegram error:", e instanceof Error ? e.message : e);
+  }
+}
+
+// ── Setup ──
+
 const ibkr = new IBKRConnection();
 const universeManager = new UniverseManager(ibkr);
+const executor = new OrderExecutor(ibkr, () => currentStatus, sendTelegramNotification);
 let currentStatus: TradingStatus = loadStatus();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -171,6 +219,14 @@ app.post("/universe/scan", (_req, res) => {
         status: "done",
       };
       console.log(`[trading-agent] Scan complete: ${data.symbols.length} symbols, ${momentum.length} momentum, ${meanRev.length} meanRev`);
+
+      // Auto-execute if mode 3
+      if (currentStatus.mode === 3 && momentum.length > 0) {
+        const trades = await executor.executeAfterScan(momentum);
+        if (trades.length > 0) {
+          console.log(`[trading-agent] Auto-executed ${trades.length} trades`);
+        }
+      }
     } catch (e) {
       lastScanResult = { universe: 0, momentum: 0, meanReversion: 0, timestamp: new Date().toISOString(), status: "error" };
       console.error("[trading-agent] Scan error:", e);
@@ -182,6 +238,12 @@ app.post("/universe/scan", (_req, res) => {
 
 app.get("/universe/scan/status", (_req, res) => {
   res.json({ ...lastScanResult, status: scanRunning ? "running" : lastScanResult.status });
+});
+
+app.get("/orders", (_req, res) => {
+  const limit = Number((_req.query as any).limit) || 20;
+  const orders = loadOrders();
+  res.json(orders.slice(-limit));
 });
 
 app.get("/universe/top", (_req, res) => {
@@ -212,6 +274,16 @@ async function start(): Promise<void> {
   pollTimer = setInterval(() => {
     pollIBKR().catch((e) => console.error("[trading-agent] Poll error:", e));
   }, POLL_INTERVAL);
+
+  // Wire auto-execution callback for scheduled scans
+  universeManager.onMomentumScan = async (results) => {
+    if (currentStatus.mode === 3 && results.length > 0) {
+      const trades = await executor.executeAfterScan(results);
+      if (trades.length > 0) {
+        console.log(`[trading-agent] Scheduled auto-execution: ${trades.length} trades`);
+      }
+    }
+  };
 
   // Start universe manager schedule
   universeManager.startSchedule();

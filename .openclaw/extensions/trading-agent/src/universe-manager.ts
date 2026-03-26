@@ -31,6 +31,7 @@ export class UniverseManager {
   private lastBuildHour = -1;
   private lastMomentumMin = -1;
   private lastMeanRevMin = -1;
+  onMomentumScan: ((results: ScanResult[]) => Promise<void>) | null = null;
 
   constructor(ibkr: IBKRConnection) {
     this.ibkr = ibkr;
@@ -250,7 +251,12 @@ export class UniverseManager {
     const fiveMinSlot = Math.floor(utcMin / 5);
     if (fiveMinSlot !== this.lastMomentumMin) {
       this.lastMomentumMin = fiveMinSlot;
-      await this.scanMomentum();
+      const momentum = await this.scanMomentum();
+      if (momentum.length > 0 && this.onMomentumScan) {
+        await this.onMomentumScan(momentum).catch((e) =>
+          console.error("[universe] Post-scan execution error:", e),
+        );
+      }
     }
 
     // Mean reversion scan every 15 minutes

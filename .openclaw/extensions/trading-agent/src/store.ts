@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, appendFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, appendFileSync, existsSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import type { Position } from "./ibkr.js";
 
@@ -76,7 +76,10 @@ function readJson<T>(path: string, fallback: T): T {
 
 function writeJson(path: string, data: unknown): void {
   ensureDir(join(path, ".."));
-  writeFileSync(path, JSON.stringify(data, null, 2), "utf8");
+  // Atomic write: write to temp file then rename to prevent corruption on crash
+  const tmp = path + ".tmp";
+  writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
+  renameSync(tmp, path);
 }
 
 // ── Status ──
@@ -84,7 +87,13 @@ function writeJson(path: string, data: unknown): void {
 const STATUS_PATH = join(BASE, "status.json");
 
 export function loadStatus(): TradingStatus {
-  return readJson<TradingStatus>(STATUS_PATH, defaultStatus());
+  const defaults = defaultStatus();
+  const loaded = readJson<Partial<TradingStatus>>(STATUS_PATH, {});
+  const merged = { ...defaults, ...loaded };
+  // Validate mode
+  if (![1, 2, 3].includes(merged.mode)) merged.mode = 1;
+  console.log(`[trading-agent] loadStatus: mode=${merged.mode} from ${existsSync(STATUS_PATH) ? 'status.json' : 'defaults'}`);
+  return merged as TradingStatus;
 }
 
 export function saveStatus(status: TradingStatus): void {

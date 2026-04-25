@@ -81,17 +81,30 @@ async function pollIBKR(): Promise<void> {
   const positions = connected ? await ibkr.reqPositions() : currentStatus.positions;
   const account = connected ? await ibkr.reqAccountSummary() : null;
 
+  const hasFreshAccount = !!account?.received;
+  const suspiciousZeroSnapshot =
+    hasFreshAccount &&
+    account!.netLiquidation === 0 &&
+    account!.cashBalance === 0 &&
+    positions.length > 0;
+
   currentStatus = {
     ...currentStatus,
     connected,
     paperMode: true,
     account: ibkr.getAccount() || currentStatus.account,
     positions,
-    dailyPnl: account?.dailyPnl ?? currentStatus.dailyPnl,
-    unrealizedPnl: account?.unrealizedPnl ?? currentStatus.unrealizedPnl,
-    realizedPnl: account?.realizedPnl ?? currentStatus.realizedPnl,
-    netLiquidation: account?.netLiquidation ?? currentStatus.netLiquidation,
-    cashBalance: account?.cashBalance ?? currentStatus.cashBalance,
+    dailyPnl: hasFreshAccount ? account!.dailyPnl : currentStatus.dailyPnl,
+    unrealizedPnl: hasFreshAccount ? account!.unrealizedPnl : currentStatus.unrealizedPnl,
+    realizedPnl: hasFreshAccount ? account!.realizedPnl : currentStatus.realizedPnl,
+    netLiquidation:
+      hasFreshAccount && !suspiciousZeroSnapshot
+        ? account!.netLiquidation
+        : currentStatus.netLiquidation,
+    cashBalance:
+      hasFreshAccount && !suspiciousZeroSnapshot
+        ? account!.cashBalance
+        : currentStatus.cashBalance,
     timestamp: new Date().toISOString(),
   };
 
@@ -254,7 +267,8 @@ app.get("/universe/top", (_req, res) => {
 // ── Startup ──
 
 async function start(): Promise<void> {
-  console.log(`[trading-agent] Starting on ${BIND}:${PORT}...`);
+  const labels: Record<number, string> = { 1: "Monitoring", 2: "Semi-Auto", 3: "Full-Auto" };
+  console.log(`[trading-agent] Starting on ${BIND}:${PORT} — Mode ${currentStatus.mode} (${labels[currentStatus.mode] || "?"})`);
 
   // Connect to IBKR (non-blocking, graceful degradation)
   ibkr.on("state", (state: string) => {

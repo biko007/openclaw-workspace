@@ -32,6 +32,7 @@ export interface AccountSummary {
   unrealizedPnl: number;
   realizedPnl: number;
   dailyPnl: number;
+  received: boolean;
 }
 
 export interface ScannerResult {
@@ -52,6 +53,7 @@ export interface OrderResult {
   stopPrice?: number;
   status: string;
   parentId?: number;
+  fillPrice?: number;
 }
 
 export interface MarketQuote {
@@ -222,6 +224,7 @@ export class IBKRConnection extends EventEmitter {
           unrealizedPnl: 0,
           realizedPnl: 0,
           dailyPnl: 0,
+          received: false,
         });
         return;
       }
@@ -233,6 +236,7 @@ export class IBKRConnection extends EventEmitter {
         unrealizedPnl: 0,
         realizedPnl: 0,
         dailyPnl: 0,
+        received: false,
       };
 
       const timeout = setTimeout(() => {
@@ -249,6 +253,7 @@ export class IBKRConnection extends EventEmitter {
       ) => {
         if (id !== reqId) return;
         const v = parseFloat(value) || 0;
+        summary.received = true;
         switch (tag) {
           case "NetLiquidation":
             summary.netLiquidation = v;
@@ -282,7 +287,7 @@ export class IBKRConnection extends EventEmitter {
       this.api.on(EventName.accountSummaryEnd, onEnd);
       this.api.reqAccountSummary(
         reqId,
-        "All",
+        this.account || "All",
         "NetLiquidation,TotalCashValue,UnrealizedPnL,RealizedPnL",
       );
     });
@@ -405,8 +410,8 @@ export class IBKRConnection extends EventEmitter {
   }
 
   /**
-   * Place a bracket order: LIMIT BUY + STOP SELL (stop-loss).
-   * Returns both order results.
+   * Place BUY order, wait for fill, then place Stop-Loss + Take-Profit.
+   * Sequential execution ensures stops are only active after entry fills.
    */
   async placeBracketOrder(params: {
     symbol: string;
@@ -415,7 +420,8 @@ export class IBKRConnection extends EventEmitter {
     quantity: number;
     limitPrice: number;
     stopPrice: number;
-  }): Promise<{ entry: OrderResult; stopLoss: OrderResult }> {
+    takeProfitPrice?: number;
+  }): Promise<{ entry: OrderResult; stopLoss?: OrderResult; takeProfit?: OrderResult }> {
     if (!this.api || !this.isConnected()) {
       throw new Error("IBKR not connected");
     }
@@ -427,113 +433,157 @@ export class IBKRConnection extends EventEmitter {
       currency: params.currency || "USD",
     };
 
-    const parentId = this.getNextOrderId();
-    const childId = this.getNextOrderId();
-
-    // Parent: LIMIT BUY
-    const parentOrder: Order = {
-      orderId: parentId,
+    // Step 1: Place BUY LIMIT order and wait for fill
+    const entryId = this.getNextOrderId();
+    const entryOrder: Order = {
+      orderId: entryId,
       action: OrderAction.BUY,
       orderType: OrderType.LMT,
       totalQuantity: params.quantity,
       lmtPrice: params.limitPrice,
-      transmit: false, // don't transmit until child is attached
+      transmit: true,
     };
 
-    // Child: STOP SELL (stop-loss)
-    const childOrder: Order = {
-      orderId: childId,
+    console.log(`[ibkr] Step 1/2: BUY ${params.quantity} ${params.symbol} LMT@${params.limitPrice}`);
+    const fillResult = await this.placeAndWaitForFill(entryId, contract, entryOrder, 30_000);
+
+    if (!fillResult.filled) {
+      console.log(`[ibkr] BUY ${params.symbol} not filled in 30s — cancelling`);
+      try { this.api!.cancelOrder(entryId); } catch { /* ignore */ }
+      return {
+        entry: {
+          orderId: entryId,
+          symbol: params.symbol,
+          action: "BUY",
+          quantity: params.quantity,
+          orderType: "LMT",
+          limitPrice: params.limitPrice,
+          status: "Cancelled",
+        },
+      };
+    }
+
+    console.log(`[ibkr] BUY ${params.symbol} filled @ ${fillResult.avgFillPrice}`);
+
+    // Step 2: Place Stop-Loss + Take-Profit (OCA group — one cancels the other)
+    const ocaGroup = `OCA_${params.symbol}_${Date.now()}`;
+    const stopId = this.getNextOrderId();
+
+    const stopOrder: Order = {
+      orderId: stopId,
       action: OrderAction.SELL,
       orderType: OrderType.STP,
       totalQuantity: params.quantity,
       auxPrice: params.stopPrice,
-      parentId,
-      transmit: true, // transmit both orders together
+      ocaGroup,
+      transmit: params.takeProfitPrice ? false : true,
     };
 
-    return new Promise((resolve, reject) => {
+    this.api!.placeOrder(stopId, contract, stopOrder);
+
+    let tpResult: OrderResult | undefined;
+
+    if (params.takeProfitPrice) {
+      const tpId = this.getNextOrderId();
+      const tpOrder: Order = {
+        orderId: tpId,
+        action: OrderAction.SELL,
+        orderType: OrderType.LMT,
+        totalQuantity: params.quantity,
+        lmtPrice: params.takeProfitPrice,
+        ocaGroup,
+        transmit: true, // transmit both exit orders
+      };
+      this.api!.placeOrder(tpId, contract, tpOrder);
+
+      tpResult = {
+        orderId: tpId,
+        symbol: params.symbol,
+        action: "SELL",
+        quantity: params.quantity,
+        orderType: "LMT",
+        limitPrice: params.takeProfitPrice,
+        status: "Submitted",
+      };
+      console.log(`[ibkr] Step 2/2: STP@${params.stopPrice} + TP@${params.takeProfitPrice} (OCA: ${ocaGroup})`);
+    } else {
+      console.log(`[ibkr] Step 2/2: STP@${params.stopPrice}`);
+    }
+
+    return {
+      entry: {
+        orderId: entryId,
+        symbol: params.symbol,
+        action: "BUY",
+        quantity: params.quantity,
+        orderType: "LMT",
+        limitPrice: params.limitPrice,
+        fillPrice: fillResult.avgFillPrice,
+        status: "Filled",
+      },
+      stopLoss: {
+        orderId: stopId,
+        symbol: params.symbol,
+        action: "SELL",
+        quantity: params.quantity,
+        orderType: "STP",
+        stopPrice: params.stopPrice,
+        status: "Submitted",
+      },
+      takeProfit: tpResult,
+    };
+  }
+
+  /**
+   * Place an order and wait for fill confirmation from IBKR.
+   */
+  private placeAndWaitForFill(
+    orderId: number,
+    contract: Contract,
+    order: Order,
+    timeoutMs: number,
+  ): Promise<{ filled: boolean; avgFillPrice: number }> {
+    return new Promise((resolve) => {
       const timeout = setTimeout(() => {
         cleanup();
-        resolve({
-          entry: {
-            orderId: parentId,
-            symbol: params.symbol,
-            action: "BUY",
-            quantity: params.quantity,
-            orderType: "LMT",
-            limitPrice: params.limitPrice,
-            status: "Submitted",
-          },
-          stopLoss: {
-            orderId: childId,
-            symbol: params.symbol,
-            action: "SELL",
-            quantity: params.quantity,
-            orderType: "STP",
-            stopPrice: params.stopPrice,
-            status: "PreSubmitted",
-            parentId,
-          },
-        });
-      }, 5_000);
+        resolve({ filled: false, avgFillPrice: 0 });
+      }, timeoutMs);
 
-      const results = new Map<number, string>();
-
-      const onOrderStatus = (
-        orderId: number,
+      const onStatus = (
+        id: number,
         status: string,
+        _filled: number,
+        _remaining: number,
+        avgFillPrice: number,
       ) => {
-        if (orderId === parentId || orderId === childId) {
-          results.set(orderId, status);
-          if (results.size >= 2) {
-            clearTimeout(timeout);
-            cleanup();
-            resolve({
-              entry: {
-                orderId: parentId,
-                symbol: params.symbol,
-                action: "BUY",
-                quantity: params.quantity,
-                orderType: "LMT",
-                limitPrice: params.limitPrice,
-                status: results.get(parentId) || "Submitted",
-              },
-              stopLoss: {
-                orderId: childId,
-                symbol: params.symbol,
-                action: "SELL",
-                quantity: params.quantity,
-                orderType: "STP",
-                stopPrice: params.stopPrice,
-                status: results.get(childId) || "PreSubmitted",
-                parentId,
-              },
-            });
-          }
+        if (id !== orderId) return;
+        if (status === "Filled") {
+          clearTimeout(timeout);
+          cleanup();
+          resolve({ filled: true, avgFillPrice });
+        } else if (status === "Cancelled" || status === "Inactive") {
+          clearTimeout(timeout);
+          cleanup();
+          resolve({ filled: false, avgFillPrice: 0 });
         }
       };
 
       const onError = (err: Error, code: ErrorCode, id: number) => {
-        if (id === parentId || id === childId) {
-          clearTimeout(timeout);
-          cleanup();
-          reject(new Error(`Order ${id} error (${code}): ${err.message}`));
-        }
+        if (id !== orderId) return;
+        clearTimeout(timeout);
+        cleanup();
+        console.error(`[ibkr] Order ${id} error (${code}): ${err.message}`);
+        resolve({ filled: false, avgFillPrice: 0 });
       };
 
       const cleanup = () => {
-        (this.api as any)?.removeListener(EventName.orderStatus, onOrderStatus);
+        (this.api as any)?.removeListener(EventName.orderStatus, onStatus);
         (this.api as any)?.removeListener(EventName.error, onError);
       };
 
-      this.api!.on(EventName.orderStatus, onOrderStatus);
+      this.api!.on(EventName.orderStatus, onStatus);
       this.api!.on(EventName.error, onError);
-
-      // Place both orders
-      this.api!.placeOrder(parentId, contract, parentOrder);
-      this.api!.placeOrder(childId, contract, childOrder);
-
-      console.log(`[ibkr] Bracket order placed: BUY ${params.quantity} ${params.symbol} @ ${params.limitPrice} | STP @ ${params.stopPrice}`);
+      this.api!.placeOrder(orderId, contract, order);
     });
   }
 

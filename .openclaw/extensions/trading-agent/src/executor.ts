@@ -17,10 +17,13 @@ const yahooFinance = new YahooFinance({
 export interface ExecutedTrade {
   symbol: string;
   quantity: number;
+  fillPrice: number;
   limitPrice: number;
   stopPrice: number;
+  takeProfitPrice: number;
   entryOrderId: number;
-  stopOrderId: number;
+  stopOrderId?: number;
+  tpOrderId?: number;
   positionSizeUsd: number;
   signal: string;
   strength: number;
@@ -158,12 +161,29 @@ export class OrderExecutor {
     const limitPrice = roundTick(currentPrice * 1.001);
     // Stop-loss: stopLossPercent below entry
     const stopPrice = roundTick(currentPrice * (1 - stopLossPercent / 100));
+    // Take-profit: 2x the stop-loss distance (risk:reward = 1:2)
+    const takeProfitPrice = roundTick(currentPrice * (1 + (stopLossPercent * 2) / 100));
 
     const exchange = symbolInfo?.exchange === "IBIS" ? "IBIS" : "SMART";
     const currency = symbolInfo?.currency || "USD";
 
-    console.log(`[executor] Placing: BUY ${quantity} ${candidate.symbol} LMT@${limitPrice} STP@${stopPrice}`);
+    console.log(`[executor] Placing: BUY ${quantity} ${candidate.symbol} LMT@${limitPrice} | STP@${stopPrice} | TP@${takeProfitPrice}`);
 
+    // Step 1: Record BUY order as submitted
+    const now = new Date().toISOString();
+    const entryRecord: OrderRecord = {
+      id: `ORD-${Date.now()}`,
+      symbol: candidate.symbol,
+      side: "BUY",
+      quantity,
+      price: limitPrice,
+      status: "Submitted",
+      orderType: "LMT",
+      timestamp: now,
+    };
+    appendOrder(entryRecord);
+
+    // Step 2: Place bracket order (BUY → wait fill → STP + TP)
     const result = await this.ibkr.placeBracketOrder({
       symbol: candidate.symbol,
       exchange,
@@ -171,62 +191,103 @@ export class OrderExecutor {
       quantity,
       limitPrice,
       stopPrice,
+      takeProfitPrice,
     });
 
-    // Record orders
-    const now = new Date().toISOString();
-    const entryRecord: OrderRecord = {
+    // Step 3: Record results based on what happened
+    if (result.entry.status === "Cancelled") {
+      // BUY didn't fill — update record
+      appendOrder({
+        ...entryRecord,
+        id: entryRecord.id + "-cancelled",
+        status: "Cancelled",
+        timestamp: new Date().toISOString(),
+      });
+      console.log(`[executor] ${candidate.symbol} BUY not filled, cancelled`);
+      return null;
+    }
+
+    // BUY filled — update entry record and record exit orders
+    const fillPrice = result.entry.fillPrice || limitPrice;
+    appendOrder({
       id: `ORD-${result.entry.orderId}`,
       symbol: candidate.symbol,
       side: "BUY",
       quantity,
-      price: limitPrice,
-      status: result.entry.status,
+      price: fillPrice,
+      status: "Filled",
+      orderType: "LMT",
+      fillPrice,
+      fillTimestamp: new Date().toISOString(),
       timestamp: now,
-    };
-    appendOrder(entryRecord);
+    });
 
-    const stopRecord: OrderRecord = {
-      id: `ORD-${result.stopLoss.orderId}`,
-      symbol: candidate.symbol,
-      side: "SELL",
-      quantity,
-      price: stopPrice,
-      status: result.stopLoss.status,
-      timestamp: now,
-    };
-    appendOrder(stopRecord);
+    // Record stop-loss (now active, waiting to trigger)
+    if (result.stopLoss) {
+      appendOrder({
+        id: `ORD-${result.stopLoss.orderId}`,
+        symbol: candidate.symbol,
+        side: "SELL",
+        quantity,
+        price: stopPrice,
+        status: "Submitted",
+        orderType: "STP",
+        parentOrderId: `ORD-${result.entry.orderId}`,
+        ocaGroup: `OCA_${candidate.symbol}`,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Record take-profit (now active, waiting to trigger)
+    if (result.takeProfit) {
+      appendOrder({
+        id: `ORD-${result.takeProfit.orderId}`,
+        symbol: candidate.symbol,
+        side: "SELL",
+        quantity,
+        price: takeProfitPrice,
+        status: "Submitted",
+        orderType: "LMT",
+        parentOrderId: `ORD-${result.entry.orderId}`,
+        ocaGroup: `OCA_${candidate.symbol}`,
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     const trade: ExecutedTrade = {
       symbol: candidate.symbol,
       quantity,
+      fillPrice,
       limitPrice,
       stopPrice,
+      takeProfitPrice,
       entryOrderId: result.entry.orderId,
-      stopOrderId: result.stopLoss.orderId,
-      positionSizeUsd: quantity * limitPrice,
+      stopOrderId: result.stopLoss?.orderId,
+      tpOrderId: result.takeProfit?.orderId,
+      positionSizeUsd: quantity * fillPrice,
       signal: candidate.signal,
       strength: candidate.strength,
     };
 
-    console.log(`[executor] Order placed: ${candidate.symbol} | ${quantity} shares @ $${limitPrice} | STP @ $${stopPrice}`);
+    console.log(`[executor] ${candidate.symbol}: FILLED @ $${fillPrice} | STP $${stopPrice} | TP $${takeProfitPrice}`);
     return trade;
   }
 
   private notifyTrades(trades: ExecutedTrade[]): void {
     const lines = trades.map(
       (t) =>
-        `  ${t.symbol}: ${t.quantity} Stk @ $${t.limitPrice.toFixed(2)} ($${t.positionSizeUsd.toFixed(0)})\n  Stop-Loss: $${t.stopPrice.toFixed(2)} | Signal: ${t.strength.toFixed(1)}%`,
+        `  ${t.symbol}: ${t.quantity} Stk @ $${t.fillPrice.toFixed(2)} ($${t.positionSizeUsd.toFixed(0)})\n` +
+        `  Stop: $${t.stopPrice.toFixed(2)} | Target: $${t.takeProfitPrice.toFixed(2)} | Signal: ${t.strength.toFixed(1)}%`,
     );
 
     const msg = [
       `🤖 *Auto-Trade ausgeführt*`,
       ``,
-      `${trades.length} Order${trades.length > 1 ? "s" : ""} platziert:`,
+      `${trades.length} Position${trades.length > 1 ? "en" : ""} eröffnet:`,
       ``,
       ...lines,
       ``,
-      `Strategie: Momentum | Modus: Full-Auto`,
+      `Strategie: Momentum | R:R 1:2 | Modus: Full-Auto`,
     ].join("\n");
 
     this.onNotify(msg);

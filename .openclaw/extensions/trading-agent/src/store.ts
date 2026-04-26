@@ -50,8 +50,13 @@ export interface OrderRecord {
   side: "BUY" | "SELL";
   quantity: number;
   price: number;
-  status: string;
+  status: string;           // Submitted, Filled, Cancelled, Inactive, PreSubmitted, Stopped, TargetHit
   timestamp: string;
+  fillPrice?: number;
+  fillTimestamp?: string;
+  parentOrderId?: string;   // links stop/target to their entry order
+  orderType?: string;       // LMT, STP, MKT
+  ocaGroup?: string;        // OCA group name for linked stop/target
 }
 
 export interface PerformanceEntry {
@@ -179,6 +184,17 @@ export function loadOrders(): OrderRecord[] {
   } catch {
     return [];
   }
+}
+
+export function updateOrder(id: string, updates: Partial<OrderRecord>): void {
+  const orders = loadOrders();
+  const idx = orders.findIndex((o) => o.id === id);
+  if (idx === -1) return;
+  orders[idx] = { ...orders[idx], ...updates };
+  ensureDir(BASE);
+  const tmp = ORDERS_PATH + ".tmp";
+  writeFileSync(tmp, orders.map((o) => JSON.stringify(o)).join("\n") + "\n", "utf8");
+  renameSync(tmp, ORDERS_PATH);
 }
 
 // ── Performance ──

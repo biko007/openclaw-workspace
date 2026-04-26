@@ -281,8 +281,9 @@ async function start(): Promise<void> {
     console.log("[trading-agent] IBKR not available, running in disconnected mode");
   }
 
-  // Initial poll
+  // Initial poll — sync positions from IBKR before any trading
   await pollIBKR();
+  console.log(`[trading-agent] Initial sync: ${currentStatus.positions.length} positions, cash $${currentStatus.cashBalance.toFixed(0)}, net $${currentStatus.netLiquidation.toFixed(0)}`);
 
   // Start polling
   pollTimer = setInterval(() => {

@@ -8,6 +8,7 @@ import {
   type ScanResult,
   type TradingStatus,
 } from "./store.js";
+import { evaluateTrade, shouldExecuteTrade, type TradeDecision } from "./ai-decision.js";
 
 const yahooFinance = new YahooFinance({
   validation: { logErrors: false },
@@ -27,6 +28,8 @@ export interface ExecutedTrade {
   positionSizeUsd: number;
   signal: string;
   strength: number;
+  aiConfidence?: number;
+  aiReasoning?: string;
 }
 
 export type NotifyFn = (message: string) => void;
@@ -148,6 +151,20 @@ export class OrderExecutor {
       return null;
     }
 
+    // AI Decision Gate: Claude Sonnet evaluates before every order
+    let aiDecision: TradeDecision;
+    try {
+      aiDecision = await evaluateTrade(candidate, currentPrice);
+      if (!shouldExecuteTrade(aiDecision)) {
+        console.log(`[executor] AI SKIP ${candidate.symbol}: confidence=${aiDecision.confidence.toFixed(2)} — ${aiDecision.reasoning}`);
+        return null;
+      }
+      console.log(`[executor] AI APPROVED ${candidate.symbol}: confidence=${aiDecision.confidence.toFixed(2)} — ${aiDecision.reasoning}`);
+    } catch (e) {
+      console.log(`[executor] AI evaluation failed for ${candidate.symbol}, skipping:`, e instanceof Error ? e.message : e);
+      return null;
+    }
+
     // Calculate quantity
     const quantity = Math.floor(budgetUsd / currentPrice);
     if (quantity <= 0) {
@@ -157,12 +174,24 @@ export class OrderExecutor {
 
     // Round to valid tick size (0.01 for most stocks)
     const roundTick = (p: number) => Math.round(p * 100) / 100;
-    // Limit price: 0.1% above current to ensure fill
-    const limitPrice = roundTick(currentPrice * 1.001);
-    // Stop-loss: stopLossPercent below entry
-    const stopPrice = roundTick(currentPrice * (1 - stopLossPercent / 100));
-    // Take-profit: 2x the stop-loss distance (risk:reward = 1:2)
-    const takeProfitPrice = roundTick(currentPrice * (1 + (stopLossPercent * 2) / 100));
+
+    // Use AI-suggested levels if valid, otherwise calculate defaults
+    let limitPrice = roundTick(currentPrice * 1.001);
+    let stopPrice = roundTick(currentPrice * (1 - stopLossPercent / 100));
+    let takeProfitPrice = roundTick(currentPrice * (1 + (stopLossPercent * 2) / 100));
+
+    if (aiDecision.suggestedEntry && aiDecision.suggestedStop && aiDecision.suggestedTarget) {
+      const aiEntry = roundTick(aiDecision.suggestedEntry);
+      const aiStop = roundTick(aiDecision.suggestedStop);
+      const aiTarget = roundTick(aiDecision.suggestedTarget);
+      // Only use AI levels if they make sense (stop < entry < target)
+      if (aiStop < aiEntry && aiTarget > aiEntry) {
+        limitPrice = aiEntry;
+        stopPrice = aiStop;
+        takeProfitPrice = aiTarget;
+        console.log(`[executor] Using AI-suggested levels for ${candidate.symbol}`);
+      }
+    }
 
     const exchange = symbolInfo?.exchange === "IBIS" ? "IBIS" : "SMART";
     const currency = symbolInfo?.currency || "USD";
@@ -267,6 +296,8 @@ export class OrderExecutor {
       positionSizeUsd: quantity * fillPrice,
       signal: candidate.signal,
       strength: candidate.strength,
+      aiConfidence: aiDecision.confidence,
+      aiReasoning: aiDecision.reasoning,
     };
 
     console.log(`[executor] ${candidate.symbol}: FILLED @ $${fillPrice} | STP $${stopPrice} | TP $${takeProfitPrice}`);
@@ -274,22 +305,25 @@ export class OrderExecutor {
   }
 
   private notifyTrades(trades: ExecutedTrade[]): void {
-    const lines = trades.map(
-      (t) =>
-        `  ${t.symbol}: ${t.quantity} Stk @ $${t.fillPrice.toFixed(2)} ($${t.positionSizeUsd.toFixed(0)})\n` +
-        `  Stop: $${t.stopPrice.toFixed(2)} | Target: $${t.takeProfitPrice.toFixed(2)} | Signal: ${t.strength.toFixed(1)}%`,
-    );
+    for (const t of trades) {
+      const rr = t.stopPrice > 0
+        ? ((t.takeProfitPrice - t.fillPrice) / (t.fillPrice - t.stopPrice)).toFixed(1)
+        : "?";
 
-    const msg = [
-      `🤖 *Auto-Trade ausgeführt*`,
-      ``,
-      `${trades.length} Position${trades.length > 1 ? "en" : ""} eröffnet:`,
-      ``,
-      ...lines,
-      ``,
-      `Strategie: Momentum | R:R 1:2 | Modus: Full-Auto`,
-    ].join("\n");
+      const msg = [
+        `📈 *Trade eröffnet*`,
+        ``,
+        `*${t.symbol}* — ${t.signal}`,
+        `Kurs: $${t.fillPrice.toFixed(2)} (${t.quantity} Stk, $${t.positionSizeUsd.toFixed(0)})`,
+        `Stop: $${t.stopPrice.toFixed(2)} | Target: $${t.takeProfitPrice.toFixed(2)} | R:R 1:${rr}`,
+        ``,
+        `*KI-Bewertung:* ${((t.aiConfidence ?? 0) * 100).toFixed(0)}%`,
+        t.aiReasoning ? `_${t.aiReasoning}_` : "",
+        ``,
+        `Modus: Full-Auto`,
+      ].filter(Boolean).join("\n");
 
-    this.onNotify(msg);
+      this.onNotify(msg);
+    }
   }
 }

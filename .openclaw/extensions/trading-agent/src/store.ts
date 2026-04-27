@@ -261,6 +261,17 @@ export interface ScanResult {
   signal: string;
   strength: number;
   timestamp: string;
+  indicators?: {
+    rsi?: number;
+    ema9?: number;
+    ema21?: number;
+    bb_upper?: number;
+    bb_lower?: number;
+    vwap?: number;
+    price?: number;
+    volume?: number;
+    volumeRatio?: number;
+  };
 }
 
 export interface UniverseData {
@@ -342,6 +353,39 @@ export function formatScanResultsText(results: ScanResult[]): string {
     (r) => `${r.symbol} | ${r.signal} | Stärke: ${r.strength.toFixed(1)} | ${r.timestamp.slice(11, 19)}`,
   );
   return ["📡 *Scan-Ergebnisse*", "", ...lines].join("\n");
+}
+
+// ── AI Decisions ──
+
+export interface DecisionRecord {
+  id: string;
+  symbol: string;
+  signal: string;
+  decision: "BUY" | "SKIP";
+  confidence: number;
+  reasoning: string;
+  suggestedEntry?: number;
+  suggestedStop?: number;
+  suggestedTarget?: number;
+  indicators?: ScanResult["indicators"];
+  price: number;
+  timestamp: string;
+}
+
+const DECISIONS_PATH = join(BASE, "decisions.jsonl");
+
+export function appendDecision(record: DecisionRecord): void {
+  ensureDir(BASE);
+  appendFileSync(DECISIONS_PATH, JSON.stringify(record) + "\n", "utf8");
+}
+
+export function loadRecentDecisions(limit = 50): DecisionRecord[] {
+  try {
+    const lines = readFileSync(DECISIONS_PATH, "utf8").trim().split("\n").filter(Boolean);
+    return lines.slice(-limit).map((l) => JSON.parse(l));
+  } catch {
+    return [];
+  }
 }
 
 // ── Formatters ──

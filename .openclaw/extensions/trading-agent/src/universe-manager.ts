@@ -12,6 +12,15 @@ import {
   type ScanResult,
   type UniverseData,
 } from "./store.js";
+import {
+  fetchOHLCV,
+  computeIndicators,
+  checkMomentumSignal,
+  checkMeanReversionSignal,
+  isMarketSafe,
+  confirmMultiTimeframe,
+  type IndicatorValues,
+} from "./indicators.js";
 
 const INDEX_SCANNER_CONFIG: Record<string, { locationCode: string; currency: string }> = {
   DAX40: { locationCode: "STK.EU.IBIS-XETRA", currency: "EUR" },
@@ -149,29 +158,78 @@ export class UniverseManager {
     if (universe.symbols.length === 0) return [];
     const results: ScanResult[] = [];
 
-    try {
-      const quotes = await this.fetchYahooQuotes(universe.symbols);
-      // Sort by % change descending → top gainers = momentum
-      const sorted = Array.from(quotes.entries())
-        .filter(([, q]) => q.changePct > 1.0 && q.volume > 50_000 && q.price > 5)
-        .sort((a, b) => b[1].changePct - a[1].changePct)
-        .slice(0, 20);
-
-      for (const [symbol, q] of sorted) {
-        const sr: ScanResult = {
-          symbol,
-          signal: "MOMENTUM_UP",
-          strength: Math.round(q.changePct * 10) / 10,
-          timestamp: new Date().toISOString(),
-        };
-        results.push(sr);
-        appendScanResult(sr);
-      }
-    } catch (e) {
-      console.log("[universe] Yahoo momentum scan error:", e instanceof Error ? e.message : e);
+    // Market safety check
+    const safety = await isMarketSafe();
+    if (!safety.safe) {
+      console.log(`[universe] Momentum scan skipped: ${safety.reason}`);
+      return [];
     }
 
-    console.log(`[universe] Momentum scan: ${results.length} signals (Yahoo Finance)`);
+    try {
+      // Pre-filter with quotes: price > $5, volume > 50k, positive day
+      const quotes = await this.fetchYahooQuotes(universe.symbols);
+      const candidates = Array.from(quotes.entries())
+        .filter(([, q]) => q.changePct > 0.5 && q.volume > 50_000 && q.price > 5)
+        .sort((a, b) => b[1].changePct - a[1].changePct)
+        .slice(0, 30); // Limit API calls
+
+      console.log(`[universe] Momentum pre-filter: ${candidates.length} candidates from ${quotes.size} symbols`);
+
+      // Analyze each candidate with technical indicators
+      for (const [symbol, q] of candidates) {
+        try {
+          const yahooSymbol = this.getYahooTicker(symbol, universe.symbols);
+          const ohlcv = await fetchOHLCV(yahooSymbol, "1h", "1mo");
+          if (ohlcv.length < 21) continue;
+
+          const indicators = computeIndicators(ohlcv);
+          if (!indicators) continue;
+
+          const signal = checkMomentumSignal(indicators);
+
+          if (signal.pass) {
+            // Multi-timeframe confirmation
+            const mtf = await confirmMultiTimeframe(yahooSymbol, "momentum");
+
+            const sr: ScanResult = {
+              symbol,
+              signal: mtf.confirmed ? "MOMENTUM_CONFIRMED" : "MOMENTUM_UP",
+              strength: signal.strength,
+              timestamp: new Date().toISOString(),
+              indicators: {
+                rsi: indicators.rsi ?? undefined,
+                ema9: indicators.ema9 ?? undefined,
+                ema21: indicators.ema21 ?? undefined,
+                bb_upper: indicators.bb_upper ?? undefined,
+                bb_lower: indicators.bb_lower ?? undefined,
+                vwap: indicators.vwap ?? undefined,
+                price: indicators.price,
+                volume: indicators.volume,
+                volumeRatio: indicators.volumeRatio ?? undefined,
+              },
+            };
+
+            if (mtf.confirmed) {
+              sr.strength += 20; // Bonus for multi-timeframe confirmation
+            }
+
+            results.push(sr);
+            appendScanResult(sr);
+            console.log(`[universe] MOMENTUM ${symbol}: strength=${sr.strength} | ${signal.details}${mtf.confirmed ? " | MTF confirmed" : ""}`);
+          }
+
+          // Rate limit: small delay between symbol lookups
+          await new Promise((r) => setTimeout(r, 300));
+        } catch (e) {
+          // Skip individual symbol errors
+          continue;
+        }
+      }
+    } catch (e) {
+      console.log("[universe] Momentum scan error:", e instanceof Error ? e.message : e);
+    }
+
+    console.log(`[universe] Momentum scan: ${results.length} signals with indicators`);
     return results;
   }
 
@@ -180,29 +238,74 @@ export class UniverseManager {
     if (universe.symbols.length === 0) return [];
     const results: ScanResult[] = [];
 
-    try {
-      const quotes = await this.fetchYahooQuotes(universe.symbols);
-      // Sort by % change ascending → top losers = mean reversion candidates
-      const sorted = Array.from(quotes.entries())
-        .filter(([, q]) => q.changePct < -1.0 && q.volume > 50_000 && q.price > 5)
-        .sort((a, b) => a[1].changePct - b[1].changePct)
-        .slice(0, 20);
-
-      for (const [symbol, q] of sorted) {
-        const sr: ScanResult = {
-          symbol,
-          signal: "MEAN_REVERSION",
-          strength: Math.round(Math.abs(q.changePct) * 10) / 10,
-          timestamp: new Date().toISOString(),
-        };
-        results.push(sr);
-        appendScanResult(sr);
-      }
-    } catch (e) {
-      console.log("[universe] Yahoo mean reversion scan error:", e instanceof Error ? e.message : e);
+    // Market safety check
+    const safety = await isMarketSafe();
+    if (!safety.safe) {
+      console.log(`[universe] Mean reversion scan skipped: ${safety.reason}`);
+      return [];
     }
 
-    console.log(`[universe] Mean reversion scan: ${results.length} signals (Yahoo Finance)`);
+    try {
+      // Pre-filter with quotes: price > $5, volume > 50k, negative day
+      const quotes = await this.fetchYahooQuotes(universe.symbols);
+      const candidates = Array.from(quotes.entries())
+        .filter(([, q]) => q.changePct < -0.5 && q.volume > 50_000 && q.price > 5)
+        .sort((a, b) => a[1].changePct - b[1].changePct)
+        .slice(0, 30);
+
+      console.log(`[universe] Mean reversion pre-filter: ${candidates.length} candidates from ${quotes.size} symbols`);
+
+      for (const [symbol, q] of candidates) {
+        try {
+          const yahooSymbol = this.getYahooTicker(symbol, universe.symbols);
+          const ohlcv = await fetchOHLCV(yahooSymbol, "1h", "1mo");
+          if (ohlcv.length < 21) continue;
+
+          const indicators = computeIndicators(ohlcv);
+          if (!indicators) continue;
+
+          const signal = checkMeanReversionSignal(indicators);
+
+          if (signal.pass) {
+            const mtf = await confirmMultiTimeframe(yahooSymbol, "meanReversion");
+
+            const sr: ScanResult = {
+              symbol,
+              signal: mtf.confirmed ? "MEAN_REV_CONFIRMED" : "MEAN_REVERSION",
+              strength: signal.strength,
+              timestamp: new Date().toISOString(),
+              indicators: {
+                rsi: indicators.rsi ?? undefined,
+                ema9: indicators.ema9 ?? undefined,
+                ema21: indicators.ema21 ?? undefined,
+                bb_upper: indicators.bb_upper ?? undefined,
+                bb_lower: indicators.bb_lower ?? undefined,
+                vwap: indicators.vwap ?? undefined,
+                price: indicators.price,
+                volume: indicators.volume,
+                volumeRatio: indicators.volumeRatio ?? undefined,
+              },
+            };
+
+            if (mtf.confirmed) {
+              sr.strength += 20;
+            }
+
+            results.push(sr);
+            appendScanResult(sr);
+            console.log(`[universe] MEAN_REV ${symbol}: strength=${sr.strength} | ${signal.details}${mtf.confirmed ? " | MTF confirmed" : ""}`);
+          }
+
+          await new Promise((r) => setTimeout(r, 300));
+        } catch (e) {
+          continue;
+        }
+      }
+    } catch (e) {
+      console.log("[universe] Mean reversion scan error:", e instanceof Error ? e.message : e);
+    }
+
+    console.log(`[universe] Mean reversion scan: ${results.length} signals with indicators`);
     return results;
   }
 
@@ -247,6 +350,13 @@ export class UniverseManager {
     const marketOpen = euOpen || usOpen;
     if (!marketOpen) return;
 
+    // Market safety check (risk-off filter + trading hours)
+    const safety = await isMarketSafe();
+    if (!safety.safe) {
+      console.log(`[universe] Tick skipped: ${safety.reason}`);
+      return;
+    }
+
     // Momentum scan every 5 minutes
     const fiveMinSlot = Math.floor(utcMin / 5);
     if (fiveMinSlot !== this.lastMomentumMin) {
@@ -268,6 +378,12 @@ export class UniverseManager {
   }
 
   // ── Helpers ──
+
+  private getYahooTicker(symbol: string, symbols: UniverseSymbol[]): string {
+    const entry = symbols.find((s) => s.symbol === symbol);
+    if (entry?.currency === "EUR") return `${symbol}.DE`;
+    return symbol;
+  }
 
   isMarketOpen(market: "EU" | "US"): boolean {
     const now = new Date();

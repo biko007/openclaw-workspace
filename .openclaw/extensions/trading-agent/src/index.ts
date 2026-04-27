@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import express from "express";
-import { IBKRConnection } from "./ibkr.js";
+import { IBKRConnection, type Position } from "./ibkr.js";
 import { UniverseManager } from "./universe-manager.js";
 import { OrderExecutor } from "./executor.js";
 import {
@@ -13,12 +13,15 @@ import {
   removeFromWatchlist,
   loadStrategies,
   loadOrders,
+  loadPerformance,
   recordDailyPerformance,
   loadUniverse,
   loadUniverseConfig,
   saveUniverseConfig,
   loadRecentScanResults,
+  loadRecentDecisions,
   type TradingStatus,
+  type OrderRecord,
 } from "./store.js";
 
 const PORT = 18793;
@@ -73,6 +76,8 @@ const universeManager = new UniverseManager(ibkr);
 const executor = new OrderExecutor(ibkr, () => currentStatus, sendTelegramNotification);
 let currentStatus: TradingStatus = loadStatus();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+let previousPositionSymbols = new Map<string, Position>(); // track for close detection
+let lastReportDay = -1; // track daily report
 
 // ── Polling ──
 
@@ -110,6 +115,194 @@ async function pollIBKR(): Promise<void> {
 
   saveStatus(currentStatus);
   if (connected) recordDailyPerformance(currentStatus);
+
+  // ── Position Close Detection ──
+  if (connected && previousPositionSymbols.size > 0) {
+    const currentSymbols = new Set(positions.map((p) => p.symbol));
+    for (const [symbol, prevPos] of previousPositionSymbols) {
+      if (!currentSymbols.has(symbol)) {
+        // Position closed — send notification
+        notifyPositionClosed(symbol, prevPos).catch((e) =>
+          console.log("[trading-agent] Close notification error:", e instanceof Error ? e.message : e),
+        );
+      }
+    }
+  }
+  // Update tracked positions
+  previousPositionSymbols = new Map(positions.map((p) => [p.symbol, p]));
+
+  // ── Daily Report at 18:00 UTC ──
+  const now = new Date();
+  const utcHour = now.getUTCHours();
+  const utcDay = now.getUTCDate();
+  if (utcHour === 18 && lastReportDay !== utcDay) {
+    lastReportDay = utcDay;
+    sendDailyReport().catch((e) =>
+      console.log("[trading-agent] Daily report error:", e instanceof Error ? e.message : e),
+    );
+  }
+}
+
+// ── Position Close Notification ──
+
+async function notifyPositionClosed(symbol: string, lastKnown: Position): Promise<void> {
+  // Find entry order for this symbol
+  const orders = loadOrders();
+  const entryOrder = orders
+    .filter((o) => o.symbol === symbol && o.side === "BUY" && o.status === "Filled")
+    .pop(); // most recent BUY fill
+
+  const entryPrice = entryOrder?.fillPrice || entryOrder?.price || lastKnown.avgCost;
+  const entryTime = entryOrder?.fillTimestamp || entryOrder?.timestamp;
+
+  // Determine close reason from exit orders
+  const exitOrders = orders.filter(
+    (o) => o.symbol === symbol && o.side === "SELL" && (o.status === "Filled" || o.status === "Stopped" || o.status === "TargetHit"),
+  );
+  const lastExit = exitOrders.pop();
+
+  let closeReason = "Manuell";
+  if (lastExit?.orderType === "STP") closeReason = "Stop-Loss";
+  else if (lastExit?.orderType === "LMT" && lastExit.parentOrderId) closeReason = "Take-Profit";
+
+  // P&L calculation
+  const pnl = lastKnown.unrealizedPnl || (lastKnown.marketPrice - lastKnown.avgCost) * lastKnown.quantity;
+  const pnlPct = entryPrice > 0 ? ((lastKnown.marketPrice - entryPrice) / entryPrice) * 100 : 0;
+
+  // Hold duration
+  let holdDuration = "";
+  if (entryTime) {
+    const diffMs = Date.now() - new Date(entryTime).getTime();
+    const hours = Math.floor(diffMs / (1000 * 60 * 60));
+    const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+    holdDuration = hours > 24
+      ? `${Math.floor(hours / 24)}d ${hours % 24}h`
+      : `${hours}h ${mins}m`;
+  }
+
+  const pnlSign = pnl >= 0 ? "+" : "";
+  const emoji = pnl >= 0 ? "✅" : "❌";
+
+  const msg = [
+    `${emoji} *Trade geschlossen*`,
+    ``,
+    `*${symbol}* — ${closeReason}`,
+    `Entry: $${entryPrice.toFixed(2)} → Exit: $${lastKnown.marketPrice.toFixed(2)}`,
+    `P&L: ${pnlSign}$${pnl.toFixed(2)} (${pnlSign}${pnlPct.toFixed(1)}%)`,
+    holdDuration ? `Haltedauer: ${holdDuration}` : "",
+    `Menge: ${lastKnown.quantity} Stk`,
+  ].filter(Boolean).join("\n");
+
+  console.log(`[trading-agent] Position closed: ${symbol} | P&L: ${pnlSign}$${pnl.toFixed(2)} | ${closeReason}`);
+  await sendTelegramNotification(msg);
+}
+
+// ── Daily Trading Report ──
+
+async function sendDailyReport(): Promise<void> {
+  const status = currentStatus;
+  const orders = loadOrders();
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Today's trades
+  const todayOrders = orders.filter(
+    (o) => o.timestamp.startsWith(today) && o.side === "BUY" && o.status === "Filled",
+  );
+
+  // Today's closed positions (SELL fills)
+  const todayExits = orders.filter(
+    (o) => o.timestamp.startsWith(today) && o.side === "SELL" &&
+      (o.status === "Filled" || o.status === "Stopped" || o.status === "TargetHit"),
+  );
+
+  // Win/Loss from closed trades
+  let wins = 0;
+  let losses = 0;
+  for (const exit of todayExits) {
+    // Find matching entry
+    const entry = orders.find(
+      (o) => o.symbol === exit.symbol && o.side === "BUY" && o.status === "Filled" &&
+        o.timestamp < exit.timestamp,
+    );
+    if (entry) {
+      const entryPrice = entry.fillPrice || entry.price;
+      const exitPrice = exit.fillPrice || exit.price;
+      if (exitPrice > entryPrice) wins++;
+      else losses++;
+    }
+  }
+
+  // Best/worst current position
+  let bestPos = "";
+  let worstPos = "";
+  if (status.positions.length > 0) {
+    const sorted = [...status.positions].sort((a, b) => b.unrealizedPnl - a.unrealizedPnl);
+    const best = sorted[0];
+    const worst = sorted[sorted.length - 1];
+    bestPos = `${best.symbol}: +$${best.unrealizedPnl.toFixed(2)}`;
+    worstPos = `${worst.symbol}: $${worst.unrealizedPnl.toFixed(2)}`;
+  }
+
+  // 30-day stats
+  const now = new Date();
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const recentOrders = orders.filter((o) => o.timestamp >= thirtyDaysAgo);
+  const recentEntries = recentOrders.filter((o) => o.side === "BUY" && o.status === "Filled");
+  const recentExits = recentOrders.filter(
+    (o) => o.side === "SELL" && (o.status === "Filled" || o.status === "Stopped" || o.status === "TargetHit"),
+  );
+
+  let totalWins30d = 0;
+  let totalTrades30d = 0;
+  for (const exit of recentExits) {
+    const entry = recentOrders.find(
+      (o) => o.symbol === exit.symbol && o.side === "BUY" && o.status === "Filled" &&
+        o.timestamp < exit.timestamp,
+    );
+    if (entry) {
+      totalTrades30d++;
+      const entryP = entry.fillPrice || entry.price;
+      const exitP = exit.fillPrice || exit.price;
+      if (exitP > entryP) totalWins30d++;
+    }
+  }
+  const winRate30d = totalTrades30d > 0 ? ((totalWins30d / totalTrades30d) * 100).toFixed(0) : "—";
+
+  // Monthly P&L from performance data
+  const monthPerf = loadPerformance(now.getFullYear(), now.getMonth() + 1);
+  const monthPnl = monthPerf.reduce((sum, e) => sum + e.dailyPnl, 0);
+
+  // Decisions today
+  const decisions = loadRecentDecisions(100).filter((d) => d.timestamp.startsWith(today));
+  const buyDecisions = decisions.filter((d) => d.decision === "BUY").length;
+  const skipDecisions = decisions.filter((d) => d.decision === "SKIP").length;
+
+  const pnlSign = status.dailyPnl >= 0 ? "+" : "";
+
+  const msg = [
+    `📊 *Täglicher Trading-Report*`,
+    ``,
+    `*${today}*`,
+    ``,
+    `Trades heute: ${todayOrders.length} eröffnet, ${todayExits.length} geschlossen`,
+    todayExits.length > 0 ? `Ergebnis: ${wins}W / ${losses}L` : "",
+    `Tages-P&L: ${pnlSign}$${status.dailyPnl.toFixed(2)}`,
+    ``,
+    bestPos ? `Beste Position: ${bestPos}` : "",
+    worstPos ? `Schlechteste: ${worstPos}` : "",
+    ``,
+    `Offene Positionen: ${status.positions.length}`,
+    `Net Liquidation: $${status.netLiquidation.toFixed(0)}`,
+    ``,
+    `*30-Tage-Statistik:*`,
+    `Win-Rate: ${winRate30d}% (${totalTrades30d} Trades)`,
+    `Monats-P&L: ${monthPnl >= 0 ? "+" : ""}$${monthPnl.toFixed(2)}`,
+    ``,
+    decisions.length > 0 ? `KI-Entscheidungen heute: ${buyDecisions} BUY / ${skipDecisions} SKIP` : "",
+  ].filter(Boolean).join("\n");
+
+  console.log(`[trading-agent] Sending daily report for ${today}`);
+  await sendTelegramNotification(msg);
 }
 
 // ── Express ──
@@ -257,6 +450,11 @@ app.get("/orders", (_req, res) => {
   const limit = Number((_req.query as any).limit) || 20;
   const orders = loadOrders();
   res.json(orders.slice(-limit));
+});
+
+app.get("/decisions", (_req, res) => {
+  const limit = Number((_req.query as any).limit) || 20;
+  res.json(loadRecentDecisions(limit));
 });
 
 app.get("/universe/top", (_req, res) => {

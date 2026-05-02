@@ -388,6 +388,30 @@ export function loadRecentDecisions(limit = 50): DecisionRecord[] {
   }
 }
 
+// ── Earnings Cache ──
+
+export interface EarningsEntry {
+  symbol: string;
+  earningsDate: string;    // "YYYY-MM-DD"
+  timing?: string;         // "BMO" / "AMC" / "TAS"
+  epsEstimate?: number;
+}
+
+export interface EarningsCache {
+  entries: EarningsEntry[];
+  lastUpdate: string;      // ISO timestamp
+}
+
+const EARNINGS_CACHE_PATH = join(BASE, "earnings-cache.json");
+
+export function loadEarningsCache(): EarningsCache {
+  return readJson<EarningsCache>(EARNINGS_CACHE_PATH, { entries: [], lastUpdate: "" });
+}
+
+export function saveEarningsCache(cache: EarningsCache): void {
+  writeJson(EARNINGS_CACHE_PATH, cache);
+}
+
 // ── Formatters ──
 
 function fmtNum(n: number, decimals = 2): string {

@@ -9,6 +9,7 @@ import {
   type TradingStatus,
 } from "./store.js";
 import { evaluateTrade, shouldExecuteTrade, type TradeDecision } from "./ai-decision.js";
+import { hasEarningsSoon, getEarningsInfo } from "./earnings-calendar.js";
 
 const yahooFinance = new YahooFinance({
   validation: { logErrors: false },
@@ -151,10 +152,19 @@ export class OrderExecutor {
       return null;
     }
 
+    // Earnings-Check: kein Kauf wenn Earnings in < 3 Tagen
+    if (hasEarningsSoon(candidate.symbol)) {
+      console.log(`[executor] ${candidate.symbol}: Earnings < 3 Tage, gesperrt`);
+      return null;
+    }
+
+    // Earnings-Info für AI (4-7 Tage)
+    const earningsInfo = getEarningsInfo(candidate.symbol);
+
     // AI Decision Gate: Claude Sonnet evaluates before every order
     let aiDecision: TradeDecision;
     try {
-      aiDecision = await evaluateTrade(candidate, currentPrice);
+      aiDecision = await evaluateTrade(candidate, currentPrice, undefined, earningsInfo);
       if (!shouldExecuteTrade(aiDecision)) {
         console.log(`[executor] AI SKIP ${candidate.symbol}: confidence=${aiDecision.confidence.toFixed(2)} — ${aiDecision.reasoning}`);
         return null;

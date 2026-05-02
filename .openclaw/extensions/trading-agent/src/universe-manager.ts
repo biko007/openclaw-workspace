@@ -21,6 +21,7 @@ import {
   confirmMultiTimeframe,
   type IndicatorValues,
 } from "./indicators.js";
+import { getBlockedSymbols, getPostEarningsSymbols } from "./earnings-calendar.js";
 
 const INDEX_SCANNER_CONFIG: Record<string, { locationCode: string; currency: string }> = {
   DAX40: { locationCode: "STK.EU.IBIS-XETRA", currency: "EUR" },
@@ -173,10 +174,18 @@ export class UniverseManager {
         .sort((a, b) => b[1].changePct - a[1].changePct)
         .slice(0, 30); // Limit API calls
 
-      console.log(`[universe] Momentum pre-filter: ${candidates.length} candidates from ${quotes.size} symbols`);
+      // Filter out earnings-blocked symbols
+      const blocked = new Set(getBlockedSymbols());
+      const preEarningsCount = candidates.length;
+      const filteredCandidates = candidates.filter(([symbol]) => !blocked.has(symbol));
+      if (filteredCandidates.length < preEarningsCount) {
+        console.log(`[universe] Earnings filter: removed ${preEarningsCount - filteredCandidates.length} symbols with upcoming earnings`);
+      }
+
+      console.log(`[universe] Momentum pre-filter: ${filteredCandidates.length} candidates from ${quotes.size} symbols`);
 
       // Analyze each candidate with technical indicators
-      for (const [symbol, q] of candidates) {
+      for (const [symbol, q] of filteredCandidates) {
         try {
           const yahooSymbol = this.getYahooTicker(symbol, universe.symbols);
           const ohlcv = await fetchOHLCV(yahooSymbol, "1h", "1mo");
@@ -225,6 +234,34 @@ export class UniverseManager {
           continue;
         }
       }
+      // Post-Earnings Momentum: symbols with earnings yesterday + >5% move
+      try {
+        const postEarnings = getPostEarningsSymbols();
+        if (postEarnings.length > 0) {
+          for (const symbol of postEarnings) {
+            const q = quotes.get(symbol);
+            if (!q || Math.abs(q.changePct) < 5) continue;
+            // Only positive post-earnings moves for momentum
+            if (q.changePct <= 0) continue;
+
+            const sr: ScanResult = {
+              symbol,
+              signal: "POST_EARNINGS_MOMENTUM",
+              strength: Math.min(q.changePct * 3, 50) + 15, // Bonus +15
+              timestamp: new Date().toISOString(),
+              indicators: {
+                price: q.price,
+                volume: q.volume,
+              },
+            };
+            results.push(sr);
+            appendScanResult(sr);
+            console.log(`[universe] POST_EARNINGS ${symbol}: +${q.changePct.toFixed(1)}% | strength=${sr.strength}`);
+          }
+        }
+      } catch (e) {
+        console.log("[universe] Post-earnings scan error:", e instanceof Error ? e.message : e);
+      }
     } catch (e) {
       console.log("[universe] Momentum scan error:", e instanceof Error ? e.message : e);
     }
@@ -253,9 +290,17 @@ export class UniverseManager {
         .sort((a, b) => a[1].changePct - b[1].changePct)
         .slice(0, 30);
 
-      console.log(`[universe] Mean reversion pre-filter: ${candidates.length} candidates from ${quotes.size} symbols`);
+      // Filter out earnings-blocked symbols
+      const blockedMR = new Set(getBlockedSymbols());
+      const preMRCount = candidates.length;
+      const filteredCandidatesMR = candidates.filter(([symbol]) => !blockedMR.has(symbol));
+      if (filteredCandidatesMR.length < preMRCount) {
+        console.log(`[universe] Earnings filter (MR): removed ${preMRCount - filteredCandidatesMR.length} symbols with upcoming earnings`);
+      }
 
-      for (const [symbol, q] of candidates) {
+      console.log(`[universe] Mean reversion pre-filter: ${filteredCandidatesMR.length} candidates from ${quotes.size} symbols`);
+
+      for (const [symbol, q] of filteredCandidatesMR) {
         try {
           const yahooSymbol = this.getYahooTicker(symbol, universe.symbols);
           const ohlcv = await fetchOHLCV(yahooSymbol, "1h", "1mo");

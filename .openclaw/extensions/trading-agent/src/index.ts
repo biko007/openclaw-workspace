@@ -9,6 +9,14 @@ import { IBKRConnection, type Position } from "./ibkr.js";
 import { UniverseManager } from "./universe-manager.js";
 import { OrderExecutor } from "./executor.js";
 import {
+  refreshEarningsCache,
+  getEarningsToday,
+  getBlockedSymbols,
+  getPostEarningsSymbols,
+  daysUntilEarnings,
+  hasEarningsSoon,
+} from "./earnings-calendar.js";
+import {
   loadStatus,
   saveStatus,
   defaultStatus,
@@ -24,6 +32,7 @@ import {
   saveUniverseConfig,
   loadRecentScanResults,
   loadRecentDecisions,
+  loadEarningsCache,
   type TradingStatus,
   type OrderRecord,
 } from "./store.js";
@@ -83,6 +92,7 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 let previousPositionSymbols = new Map<string, Position>(); // track for close detection
 let lastReportDay = -1; // track daily report
 let lastHealthCheckDay = -1; // track daily health check
+let lastEarningsRefreshDay = -1; // track daily earnings cache refresh
 
 // ── Watchdog state ──
 const WATCHDOG_INTERVAL = 5 * 60 * 1000; // 5 minutes
@@ -159,6 +169,14 @@ async function pollIBKR(): Promise<void> {
     lastHealthCheckDay = utcDay;
     sendHealthCheck().catch((e) =>
       console.log("[trading-agent] Health check error:", e instanceof Error ? e.message : e),
+    );
+  }
+
+  // ── Daily Earnings Cache Refresh at 06:00 UTC ──
+  if (utcHour === 6 && lastEarningsRefreshDay !== utcDay) {
+    lastEarningsRefreshDay = utcDay;
+    refreshEarningsCache().catch((e) =>
+      console.log("[earnings] Daily refresh error:", e instanceof Error ? e.message : e),
     );
   }
 }
@@ -615,6 +633,45 @@ app.get("/universe/top", (_req, res) => {
   res.json(universeManager.getTopCandidates(limit));
 });
 
+// ── Earnings Endpoints ──
+
+app.get("/earnings", (_req, res) => {
+  const cache = loadEarningsCache();
+  const cacheAge = cache.lastUpdate
+    ? Math.round((Date.now() - new Date(cache.lastUpdate).getTime()) / 60_000)
+    : null;
+  res.json({
+    today: getEarningsToday(),
+    blocked: getBlockedSymbols(),
+    postEarnings: getPostEarningsSymbols(),
+    cacheAge: cacheAge !== null ? `${cacheAge}min` : "never",
+    lastUpdate: cache.lastUpdate || null,
+    totalEntries: cache.entries.length,
+  });
+});
+
+app.get("/earnings/:symbol", (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const days = daysUntilEarnings(symbol);
+  const isBlocked = hasEarningsSoon(symbol);
+  const cache = loadEarningsCache();
+  const entry = cache.entries.find((e) => e.symbol === symbol);
+  res.json({
+    symbol,
+    earningsDate: entry?.earningsDate || null,
+    timing: entry?.timing || null,
+    daysUntil: days,
+    blocked: isBlocked,
+  });
+});
+
+app.post("/earnings/refresh", (_req, res) => {
+  res.json({ message: "Earnings refresh gestartet" });
+  refreshEarningsCache().catch((e) =>
+    console.log("[earnings] Manual refresh error:", e instanceof Error ? e.message : e),
+  );
+});
+
 // ── Startup ──
 
 async function start(): Promise<void> {
@@ -646,6 +703,11 @@ async function start(): Promise<void> {
   // Initial poll — sync positions from IBKR before any trading
   await pollIBKR();
   console.log(`[trading-agent] Initial sync: ${currentStatus.positions.length} positions, cash $${currentStatus.cashBalance.toFixed(0)}, net $${currentStatus.netLiquidation.toFixed(0)}`);
+
+  // Initial earnings cache refresh
+  refreshEarningsCache().catch((e) =>
+    console.log("[earnings] Initial refresh error:", e instanceof Error ? e.message : e),
+  );
 
   // Start polling
   pollTimer = setInterval(() => {

@@ -73,6 +73,7 @@ export async function evaluateTrade(
   candidate: ScanResult,
   currentPrice: number,
   sectorPerformance?: string,
+  earningsInfo?: string,
 ): Promise<TradeDecision> {
   // Build context from trade history for this symbol
   const recentOrders = loadOrders()
@@ -122,6 +123,9 @@ ${indicatorText}
 ## Sektor-Performance
 ${sectorPerformance || "Nicht verfügbar"}
 
+## Earnings
+${earningsInfo || "Keine anstehenden Earnings bekannt"}
+
 ## Trade-Historie für ${candidate.symbol}
 ${tradeHistory}
 
@@ -134,6 +138,7 @@ Bewerte diesen Trade-Kandidaten. Berücksichtige:
 2. Risiko-Ertrags-Verhältnis
 3. Aktuelle Marktbedingungen
 4. Ob wir bereits ähnliche Positionen haben
+5. Earnings-Risiko (Gap-Risiko vor Quartalszahlen)
 
 Antworte NUR mit validem JSON in diesem Format:
 {

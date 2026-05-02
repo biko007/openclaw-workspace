@@ -1,5 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { exec as execCb } from "node:child_process";
+import { promisify } from "node:util";
+
+const execAsync = promisify(execCb);
 import express from "express";
 import { IBKRConnection, type Position } from "./ibkr.js";
 import { UniverseManager } from "./universe-manager.js";
@@ -78,6 +82,14 @@ let currentStatus: TradingStatus = loadStatus();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let previousPositionSymbols = new Map<string, Position>(); // track for close detection
 let lastReportDay = -1; // track daily report
+let lastHealthCheckDay = -1; // track daily health check
+
+// ── Watchdog state ──
+const WATCHDOG_INTERVAL = 5 * 60 * 1000; // 5 minutes
+let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+let consecutiveWatchdogFailures = 0;
+let lastGatewayRestart = 0; // timestamp ms
+const GATEWAY_RESTART_COOLDOWN = 60 * 60 * 1000; // 1 hour
 
 // ── Polling ──
 
@@ -139,6 +151,14 @@ async function pollIBKR(): Promise<void> {
     lastReportDay = utcDay;
     sendDailyReport().catch((e) =>
       console.log("[trading-agent] Daily report error:", e instanceof Error ? e.message : e),
+    );
+  }
+
+  // ── Daily Health Check at 08:00 UTC ──
+  if (utcHour === 8 && lastHealthCheckDay !== utcDay) {
+    lastHealthCheckDay = utcDay;
+    sendHealthCheck().catch((e) =>
+      console.log("[trading-agent] Health check error:", e instanceof Error ? e.message : e),
     );
   }
 }
@@ -302,6 +322,139 @@ async function sendDailyReport(): Promise<void> {
   ].filter(Boolean).join("\n");
 
   console.log(`[trading-agent] Sending daily report for ${today}`);
+  await sendTelegramNotification(msg);
+}
+
+// ── Watchdog ──
+
+async function restartGateway(): Promise<boolean> {
+  const now = Date.now();
+  if (now - lastGatewayRestart < GATEWAY_RESTART_COOLDOWN) {
+    console.log("[watchdog] Gateway restart skipped — cooldown active");
+    return false;
+  }
+  lastGatewayRestart = now;
+
+  // Try user-level systemctl first, then sudo
+  for (const cmd of [
+    "systemctl --user restart ibgateway.service",
+    "sudo systemctl restart ibgateway.service",
+  ]) {
+    try {
+      console.log(`[watchdog] Attempting: ${cmd}`);
+      await execAsync(cmd, { timeout: 30_000 });
+      console.log("[watchdog] Gateway restart succeeded");
+      return true;
+    } catch (e) {
+      console.log(`[watchdog] ${cmd} failed:`, e instanceof Error ? e.message : e);
+    }
+  }
+  return false;
+}
+
+async function watchdogTick(): Promise<void> {
+  const problems: string[] = [];
+
+  // Check 1: IBKR connected?
+  const connected = ibkr.isConnected();
+  if (!connected) {
+    problems.push(`IBKR disconnected (reconnect attempts: ${ibkr.reconnectAttempts})`);
+  }
+
+  // Check 2: Last scan < 10 minutes?
+  if (lastScanResult.timestamp) {
+    const scanAge = Date.now() - new Date(lastScanResult.timestamp).getTime();
+    if (scanAge > 10 * 60 * 1000) {
+      problems.push(`Last scan stale (${Math.round(scanAge / 60_000)}min ago)`);
+    }
+  }
+
+  // Check 3: Scheduler still running?
+  if (!universeManager.isScheduleRunning()) {
+    problems.push("Universe scheduler stopped");
+  }
+
+  if (problems.length === 0) {
+    if (consecutiveWatchdogFailures > 0) {
+      console.log("[watchdog] All checks passed — recovered after " + consecutiveWatchdogFailures + " failures");
+    }
+    consecutiveWatchdogFailures = 0;
+    console.log("[watchdog] OK — connected=" + connected + " scheduler=" + universeManager.isScheduleRunning());
+    return;
+  }
+
+  consecutiveWatchdogFailures++;
+  console.log(`[watchdog] Problems (${consecutiveWatchdogFailures}x): ${problems.join("; ")}`);
+
+  // Auto-reconnect if disconnected
+  if (!connected) {
+    try {
+      console.log("[watchdog] Triggering reconnect...");
+      await ibkr.connect();
+    } catch (e) {
+      console.log("[watchdog] Reconnect failed:", e instanceof Error ? e.message : e);
+    }
+  }
+
+  // After 3 consecutive failures: alert + gateway restart
+  if (consecutiveWatchdogFailures >= 3) {
+    const msg = [
+      `⚠️ *Trading Agent Watchdog Alert*`,
+      ``,
+      `${consecutiveWatchdogFailures} consecutive failures:`,
+      ...problems.map((p) => `• ${p}`),
+      ``,
+      `IBKR state: ${ibkr.state}`,
+      `Reconnect attempts: ${ibkr.reconnectAttempts}`,
+    ].join("\n");
+
+    await sendTelegramNotification(msg);
+
+    // Gateway restart after 3 failed IBKR reconnects
+    if (!connected && ibkr.reconnectAttempts >= 3) {
+      const restarted = await restartGateway();
+      if (restarted) {
+        await sendTelegramNotification("🔄 *IB Gateway restarted* — waiting for reconnect...");
+      }
+    }
+  }
+}
+
+// ── Health Check ──
+
+async function sendHealthCheck(): Promise<void> {
+  const status = currentStatus;
+  const connected = ibkr.isConnected();
+
+  const scanAge = lastScanResult.timestamp
+    ? Math.round((Date.now() - new Date(lastScanResult.timestamp).getTime()) / 60_000) + "min ago"
+    : "never";
+
+  const positionLines = status.positions.length > 0
+    ? status.positions.map((p) => {
+        const pnlSign = p.unrealizedPnl >= 0 ? "+" : "";
+        return `  ${p.symbol}: ${p.quantity} Stk | ${pnlSign}$${p.unrealizedPnl.toFixed(2)}`;
+      }).join("\n")
+    : "  Keine offenen Positionen";
+
+  const msg = [
+    `🏥 *Täglicher Health-Check*`,
+    ``,
+    `*IBKR:* ${connected ? "✅ Connected" : "❌ Disconnected"}`,
+    `Reconnect-Versuche: ${ibkr.reconnectAttempts}`,
+    ``,
+    `*Letzter Scan:* ${scanAge}`,
+    `Ergebnis: ${lastScanResult.universe} Universe, ${lastScanResult.momentum} Momentum, ${lastScanResult.meanReversion} MeanRev`,
+    ``,
+    `*Positionen:*`,
+    positionLines,
+    ``,
+    `*Watchdog:* ${consecutiveWatchdogFailures === 0 ? "✅ OK" : `⚠️ ${consecutiveWatchdogFailures} Failures`}`,
+    `Scheduler: ${universeManager.isScheduleRunning() ? "✅ Running" : "❌ Stopped"}`,
+    `Net Liquidation: $${status.netLiquidation.toFixed(0)}`,
+  ].join("\n");
+
+  console.log("[trading-agent] Sending daily health check");
   await sendTelegramNotification(msg);
 }
 
@@ -473,6 +626,17 @@ async function start(): Promise<void> {
     console.log(`[trading-agent] IBKR state: ${state}`);
   });
 
+  // Wire reconnect events
+  ibkr.on("reconnected", () => {
+    console.log("[trading-agent] IBKR reconnected — resyncing positions");
+    consecutiveWatchdogFailures = 0;
+    pollIBKR().catch((e) => console.error("[trading-agent] Post-reconnect poll error:", e));
+  });
+
+  ibkr.on("reconnectFailed", (attempt: number) => {
+    console.log(`[trading-agent] IBKR reconnect failed (attempt ${attempt})`);
+  });
+
   try {
     await ibkr.connect();
   } catch (e) {
@@ -487,6 +651,12 @@ async function start(): Promise<void> {
   pollTimer = setInterval(() => {
     pollIBKR().catch((e) => console.error("[trading-agent] Poll error:", e));
   }, POLL_INTERVAL);
+
+  // Start watchdog (every 5 minutes)
+  watchdogTimer = setInterval(() => {
+    watchdogTick().catch((e) => console.error("[watchdog] Error:", e));
+  }, WATCHDOG_INTERVAL);
+  console.log("[watchdog] Started (interval: 5min)");
 
   // Wire auto-execution callback for scheduled scans
   universeManager.onMomentumScan = async (results) => {
@@ -511,6 +681,7 @@ async function start(): Promise<void> {
 
 function shutdown(): void {
   console.log("[trading-agent] Shutting down...");
+  if (watchdogTimer) clearInterval(watchdogTimer);
   universeManager.stopSchedule();
   if (pollTimer) clearInterval(pollTimer);
   ibkr.disconnect();

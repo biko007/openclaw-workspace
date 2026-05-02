@@ -320,6 +320,10 @@ export class UniverseManager {
     }, 60_000);
   }
 
+  isScheduleRunning(): boolean {
+    return this.scheduleTimer !== null;
+  }
+
   stopSchedule(): void {
     if (this.scheduleTimer) {
       clearInterval(this.scheduleTimer);

@@ -67,7 +67,7 @@ export interface MarketQuote {
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
-const BACKOFF_STEPS = [5_000, 10_000, 30_000];
+const BACKOFF_STEPS = [5_000, 10_000, 30_000, 60_000, 120_000];
 
 export class IBKRConnection extends EventEmitter {
   private api: IBApi | null = null;
@@ -76,7 +76,7 @@ export class IBKRConnection extends EventEmitter {
   private clientId: number;
   private _state: ConnectionState = "disconnected";
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private reconnectAttempt = 0;
+  private _reconnectAttempt = 0;
   private nextReqId = 1000;
   private _nextOrderId = 0;
   private account = "";
@@ -100,6 +100,10 @@ export class IBKRConnection extends EventEmitter {
     return this.account;
   }
 
+  get reconnectAttempts(): number {
+    return this._reconnectAttempt;
+  }
+
   async connect(): Promise<void> {
     if (this._state === "connected" || this._state === "connecting") return;
     this.setState("connecting");
@@ -108,9 +112,13 @@ export class IBKRConnection extends EventEmitter {
       this.api = new IBApi({ host: this.host, port: this.port, clientId: this.clientId });
 
       this.api.on(EventName.connected, () => {
-        this.reconnectAttempt = 0;
+        const wasReconnect = this._reconnectAttempt > 0;
+        this._reconnectAttempt = 0;
         this.setState("connected");
         this.api!.reqManagedAccts();
+        if (wasReconnect) {
+          this.emit("reconnected");
+        }
       });
 
       this.api.on(EventName.disconnected, () => {
@@ -595,8 +603,11 @@ export class IBKRConnection extends EventEmitter {
 
   private scheduleReconnect(): void {
     if (this.reconnectTimer) return;
-    const delay = BACKOFF_STEPS[Math.min(this.reconnectAttempt, BACKOFF_STEPS.length - 1)];
-    this.reconnectAttempt++;
+    const delay = BACKOFF_STEPS[Math.min(this._reconnectAttempt, BACKOFF_STEPS.length - 1)];
+    this._reconnectAttempt++;
+    if (this._reconnectAttempt > BACKOFF_STEPS.length) {
+      this.emit("reconnectFailed", this._reconnectAttempt);
+    }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();

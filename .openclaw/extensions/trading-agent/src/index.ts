@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 
 const execAsync = promisify(execCb);
 import express from "express";
+import YahooFinance from "yahoo-finance2";
 import { IBKRConnection, type Position } from "./ibkr.js";
 import { UniverseManager } from "./universe-manager.js";
 import { OrderExecutor } from "./executor.js";
@@ -101,12 +102,67 @@ let consecutiveWatchdogFailures = 0;
 let lastGatewayRestart = 0; // timestamp ms
 const GATEWAY_RESTART_COOLDOWN = 60 * 60 * 1000; // 1 hour
 
+// ── Yahoo Finance for position pricing ──
+
+const yahooFinance = new YahooFinance({
+  validation: { logErrors: false },
+  suppressNotices: ["yahooSurvey"],
+});
+
+async function enrichPositionsWithPrices(positions: Position[]): Promise<Position[]> {
+  if (positions.length === 0) return positions;
+
+  // Build yahoo tickers
+  const universe = loadUniverse();
+  const tickerMap = new Map<string, string>(); // yahoo ticker → original symbol
+  for (const p of positions) {
+    const uSym = universe.symbols.find((s) => s.symbol === p.symbol);
+    const ticker = uSym?.currency === "EUR" ? `${p.symbol}.DE` : p.symbol;
+    tickerMap.set(ticker, p.symbol);
+  }
+
+  const tickers = Array.from(tickerMap.keys());
+  try {
+    const results: any = await yahooFinance.quote(tickers);
+    const arr: any[] = Array.isArray(results) ? results : [results];
+    const priceMap = new Map<string, number>();
+    for (const q of arr) {
+      if (!q?.symbol) continue;
+      const origSymbol = tickerMap.get(q.symbol) || q.symbol.replace(/\.DE$/, "");
+      const price: number = q.regularMarketPrice ?? 0;
+      if (price > 0) priceMap.set(origSymbol, price);
+    }
+
+    return positions.map((p) => {
+      const mktPrice = priceMap.get(p.symbol);
+      if (mktPrice && mktPrice > 0) {
+        return {
+          ...p,
+          marketPrice: mktPrice,
+          marketValue: mktPrice * p.quantity,
+          unrealizedPnl: (mktPrice - p.avgCost) * p.quantity,
+        };
+      }
+      return p;
+    });
+  } catch (e) {
+    console.log("[trading-agent] Yahoo price enrichment error:", e instanceof Error ? e.message : e);
+    return positions;
+  }
+}
+
 // ── Polling ──
 
 async function pollIBKR(): Promise<void> {
   const connected = ibkr.isConnected();
-  const positions = connected ? await ibkr.reqPositions() : currentStatus.positions;
+  let positions = connected ? await ibkr.reqPositions() : currentStatus.positions;
   const account = connected ? await ibkr.reqAccountSummary() : null;
+
+  // Enrich positions with Yahoo Finance prices if IBKR returns zero prices
+  const needsEnrichment = positions.length > 0 && positions.some((p) => p.marketPrice === 0);
+  if (needsEnrichment) {
+    positions = await enrichPositionsWithPrices(positions);
+  }
 
   const hasFreshAccount = !!account?.received;
   const suspiciousZeroSnapshot =
@@ -115,6 +171,9 @@ async function pollIBKR(): Promise<void> {
     account!.cashBalance === 0 &&
     positions.length > 0;
 
+  // Compute unrealized P&L from enriched positions as fallback
+  const positionPnl = positions.reduce((sum, p) => sum + p.unrealizedPnl, 0);
+
   currentStatus = {
     ...currentStatus,
     connected,
@@ -122,7 +181,9 @@ async function pollIBKR(): Promise<void> {
     account: ibkr.getAccount() || currentStatus.account,
     positions,
     dailyPnl: hasFreshAccount ? account!.dailyPnl : currentStatus.dailyPnl,
-    unrealizedPnl: hasFreshAccount ? account!.unrealizedPnl : currentStatus.unrealizedPnl,
+    unrealizedPnl: hasFreshAccount && account!.unrealizedPnl !== 0
+      ? account!.unrealizedPnl
+      : positionPnl || currentStatus.unrealizedPnl,
     realizedPnl: hasFreshAccount ? account!.realizedPnl : currentStatus.realizedPnl,
     netLiquidation:
       hasFreshAccount && !suspiciousZeroSnapshot
@@ -728,6 +789,18 @@ async function start(): Promise<void> {
         console.log(`[trading-agent] Scheduled auto-execution: ${trades.length} trades`);
       }
     }
+  };
+
+  // Track scheduled scan results for health check
+  universeManager.onScanComplete = (info) => {
+    const universe = loadUniverse();
+    lastScanResult = {
+      universe: universe.symbols.length,
+      momentum: info.momentum,
+      meanReversion: info.meanReversion,
+      timestamp: new Date().toISOString(),
+      status: "done",
+    };
   };
 
   // Start universe manager schedule

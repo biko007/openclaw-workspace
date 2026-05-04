@@ -42,6 +42,7 @@ export class UniverseManager {
   private lastMomentumMin = -1;
   private lastMeanRevMin = -1;
   onMomentumScan: ((results: ScanResult[]) => Promise<void>) | null = null;
+  onScanComplete: ((info: { momentum: number; meanReversion: number }) => void) | null = null;
 
   constructor(ibkr: IBKRConnection) {
     this.ibkr = ibkr;
@@ -407,10 +408,13 @@ export class UniverseManager {
     }
 
     // Momentum scan every 5 minutes
+    let momentumCount = 0;
+    let meanRevCount = 0;
     const fiveMinSlot = Math.floor(utcMin / 5);
     if (fiveMinSlot !== this.lastMomentumMin) {
       this.lastMomentumMin = fiveMinSlot;
       const momentum = await this.scanMomentum();
+      momentumCount = momentum.length;
       if (momentum.length > 0 && this.onMomentumScan) {
         await this.onMomentumScan(momentum).catch((e) =>
           console.error("[universe] Post-scan execution error:", e),
@@ -422,7 +426,13 @@ export class UniverseManager {
     const fifteenMinSlot = Math.floor(utcMin / 15);
     if (fifteenMinSlot !== this.lastMeanRevMin) {
       this.lastMeanRevMin = fifteenMinSlot;
-      await this.scanMeanReversion();
+      const meanRev = await this.scanMeanReversion();
+      meanRevCount = meanRev.length;
+    }
+
+    // Notify scan complete
+    if (this.onScanComplete) {
+      this.onScanComplete({ momentum: momentumCount, meanReversion: meanRevCount });
     }
   }
 

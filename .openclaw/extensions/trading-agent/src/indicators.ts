@@ -313,12 +313,17 @@ export function checkMeanReversionSignal(indicators: IndicatorValues): SignalRes
 // ── Debug Statistics ──
 
 export interface ScanDebugStats {
+  universeSize: number;
+  quotesReceived: number;
+  preFilterPassed: number;
   totalAnalyzed: number;
   momentum: {
     emaBullish: number;
     emaCross: number;
     rsiInZone: number;
     volumeAbove120: number;
+    volumeAbove100: number;
+    avgVolumeRatio: number;
     passed: number;
   };
   meanReversion: {
@@ -338,13 +343,22 @@ export function getLastDebugStats(): ScanDebugStats | null {
   return lastDebugStats;
 }
 
-export function collectDebugStats(candidates: IndicatorValues[]): ScanDebugStats {
+export function collectDebugStats(
+  candidates: IndicatorValues[],
+  meta?: { universeSize: number; quotesReceived: number; preFilterPassed: number },
+): ScanDebugStats {
   const stats: ScanDebugStats = {
+    universeSize: meta?.universeSize ?? 0,
+    quotesReceived: meta?.quotesReceived ?? 0,
+    preFilterPassed: meta?.preFilterPassed ?? 0,
     totalAnalyzed: candidates.length,
-    momentum: { emaBullish: 0, emaCross: 0, rsiInZone: 0, volumeAbove120: 0, passed: 0 },
+    momentum: { emaBullish: 0, emaCross: 0, rsiInZone: 0, volumeAbove120: 0, volumeAbove100: 0, avgVolumeRatio: 0, passed: 0 },
     meanReversion: { rsiBelow35: 0, rsiBelow30: 0, belowBBLower: 0, inLowerThird: 0, volumeAbove120: 0, passed: 0 },
     timestamp: new Date().toISOString(),
   };
+
+  let volSum = 0;
+  let volCount = 0;
 
   for (const ind of candidates) {
     // Momentum conditions
@@ -353,11 +367,18 @@ export function collectDebugStats(candidates: IndicatorValues[]): ScanDebugStats
       ind.prevEma9 <= ind.prevEma21 && ind.ema9 > ind.ema21;
     const rsiInZone = ind.rsi !== null && ind.rsi >= 50 && ind.rsi <= 70;
     const volAbove120 = ind.volumeRatio !== null && ind.volumeRatio >= 1.2;
+    const volAbove100 = ind.volumeRatio !== null && ind.volumeRatio >= 1.0;
 
     if (emaBullish) stats.momentum.emaBullish++;
     if (emaCross) stats.momentum.emaCross++;
     if (rsiInZone) stats.momentum.rsiInZone++;
     if (volAbove120) stats.momentum.volumeAbove120++;
+    if (volAbove100) stats.momentum.volumeAbove100++;
+
+    if (ind.volumeRatio !== null && ind.volumeRatio > 0) {
+      volSum += ind.volumeRatio;
+      volCount++;
+    }
 
     const momConditions = (emaBullish ? 1 : 0) + (rsiInZone ? 1 : 0) + (volAbove120 ? 1 : 0);
     if (momConditions >= 2 && emaBullish) stats.momentum.passed++;
@@ -378,6 +399,8 @@ export function collectDebugStats(candidates: IndicatorValues[]): ScanDebugStats
     const mrConditions = (rsiBelow35 ? 1 : 0) + ((belowBB || inLowerThird) ? 1 : 0) + (volAbove120 ? 1 : 0);
     if (rsiBelow35 && mrConditions >= 2) stats.meanReversion.passed++;
   }
+
+  stats.momentum.avgVolumeRatio = volCount > 0 ? Math.round((volSum / volCount) * 100) / 100 : 0;
 
   lastDebugStats = stats;
   return stats;

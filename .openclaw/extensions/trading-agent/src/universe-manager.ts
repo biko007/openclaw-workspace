@@ -178,9 +178,12 @@ export class UniverseManager {
       return [];
     }
 
+    let quotes = new Map<string, { price: number; changePct: number; volume: number; volumeRatio: number }>();
+    let filteredCandidates: [string, { price: number; changePct: number; volume: number; volumeRatio: number }][] = [];
+
     try {
       // Pre-filter with quotes: price > $5, volume > 50k, positive day
-      const quotes = await this.fetchYahooQuotes(universe.symbols);
+      quotes = await this.fetchYahooQuotes(universe.symbols);
       const candidates = Array.from(quotes.entries())
         .filter(([, q]) => q.changePct > 0.5 && q.volume > 50_000 && q.price > 5)
         .sort((a, b) => b[1].changePct - a[1].changePct);
@@ -188,7 +191,7 @@ export class UniverseManager {
       // Filter out earnings-blocked symbols
       const blocked = new Set(getBlockedSymbols());
       const preEarningsCount = candidates.length;
-      const filteredCandidates = candidates.filter(([symbol]) => !blocked.has(symbol));
+      filteredCandidates = candidates.filter(([symbol]) => !blocked.has(symbol));
       if (filteredCandidates.length < preEarningsCount) {
         console.log(`[universe] Earnings filter: removed ${preEarningsCount - filteredCandidates.length} symbols with upcoming earnings`);
       }
@@ -283,8 +286,14 @@ export class UniverseManager {
 
     // Collect debug stats
     if (allIndicators.length > 0) {
-      this._lastDebugStats = collectDebugStats(allIndicators);
-      console.log(`[universe] Debug: ${allIndicators.length} analyzed | EMA bullish: ${this._lastDebugStats.momentum.emaBullish} | RSI 50-70: ${this._lastDebugStats.momentum.rsiInZone} | Vol>120%: ${this._lastDebugStats.momentum.volumeAbove120} | Pass: ${this._lastDebugStats.momentum.passed}`);
+      this._lastDebugStats = collectDebugStats(allIndicators, {
+        universeSize: universe.symbols.length,
+        quotesReceived: quotes.size,
+        preFilterPassed: filteredCandidates.length,
+      });
+      const d = this._lastDebugStats;
+      console.log(`[universe] Debug: ${d.universeSize} universe → ${d.quotesReceived} quoted → ${d.preFilterPassed} pre-filter → ${d.totalAnalyzed} analyzed`);
+      console.log(`[universe] Debug: EMA bullish=${d.momentum.emaBullish} | RSI 50-70=${d.momentum.rsiInZone} | Vol>120%=${d.momentum.volumeAbove120} | Vol>100%=${d.momentum.volumeAbove100} | avgVolRatio=${d.momentum.avgVolumeRatio} | Pass=${d.momentum.passed}`);
     }
 
     console.log(`[universe] Momentum scan: ${results.length} signals with indicators`);

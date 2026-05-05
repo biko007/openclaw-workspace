@@ -413,6 +413,55 @@ export class IBKRConnection extends EventEmitter {
 
   // ── Order Placement ──
 
+  /**
+   * Place a market SELL order and wait for fill.
+   */
+  async placeMarketSell(params: {
+    symbol: string;
+    exchange: string;
+    currency: string;
+    quantity: number;
+  }): Promise<OrderResult> {
+    if (!this.api || !this.isConnected()) {
+      throw new Error("IBKR not connected");
+    }
+
+    const contract: Contract = {
+      symbol: params.symbol,
+      secType: SecType.STK,
+      exchange: params.exchange || "SMART",
+      currency: params.currency || "USD",
+    };
+
+    const orderId = this.getNextOrderId();
+    const order: Order = {
+      orderId,
+      action: OrderAction.SELL,
+      orderType: OrderType.MKT,
+      totalQuantity: params.quantity,
+      transmit: true,
+    };
+
+    console.log(`[ibkr] MKT SELL ${params.quantity} ${params.symbol}`);
+    const result = await this.placeAndWaitForFill(orderId, contract, order, 30_000);
+
+    if (!result.filled) {
+      throw new Error(`MKT SELL ${params.symbol} not filled in 30s`);
+    }
+
+    console.log(`[ibkr] SELL ${params.symbol} filled @ ${result.avgFillPrice}`);
+
+    return {
+      orderId,
+      symbol: params.symbol,
+      action: "SELL",
+      quantity: params.quantity,
+      orderType: "MKT",
+      fillPrice: result.avgFillPrice,
+      status: "Filled",
+    };
+  }
+
   private getNextOrderId(): number {
     return this._nextOrderId++;
   }

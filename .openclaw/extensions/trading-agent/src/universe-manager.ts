@@ -19,7 +19,9 @@ import {
   checkMeanReversionSignal,
   isMarketSafe,
   confirmMultiTimeframe,
+  collectDebugStats,
   type IndicatorValues,
+  type ScanDebugStats,
 } from "./indicators.js";
 import { getBlockedSymbols, getPostEarningsSymbols } from "./earnings-calendar.js";
 
@@ -41,8 +43,13 @@ export class UniverseManager {
   private lastBuildHour = -1;
   private lastMomentumMin = -1;
   private lastMeanRevMin = -1;
+  private _lastDebugStats: ScanDebugStats | null = null;
   onMomentumScan: ((results: ScanResult[]) => Promise<void>) | null = null;
   onScanComplete: ((info: { momentum: number; meanReversion: number }) => void) | null = null;
+
+  get lastDebugStats(): ScanDebugStats | null {
+    return this._lastDebugStats;
+  }
 
   constructor(ibkr: IBKRConnection) {
     this.ibkr = ibkr;
@@ -159,6 +166,7 @@ export class UniverseManager {
     const universe = loadUniverse();
     if (universe.symbols.length === 0) return [];
     const results: ScanResult[] = [];
+    const allIndicators: IndicatorValues[] = []; // collect for debug stats
 
     // Market safety check
     const safety = await isMarketSafe();
@@ -195,6 +203,7 @@ export class UniverseManager {
           const indicators = computeIndicators(ohlcv);
           if (!indicators) continue;
 
+          allIndicators.push(indicators);
           const signal = checkMomentumSignal(indicators);
 
           if (signal.pass) {
@@ -265,6 +274,12 @@ export class UniverseManager {
       }
     } catch (e) {
       console.log("[universe] Momentum scan error:", e instanceof Error ? e.message : e);
+    }
+
+    // Collect debug stats
+    if (allIndicators.length > 0) {
+      this._lastDebugStats = collectDebugStats(allIndicators);
+      console.log(`[universe] Debug: ${allIndicators.length} analyzed | EMA bullish: ${this._lastDebugStats.momentum.emaBullish} | RSI 50-70: ${this._lastDebugStats.momentum.rsiInZone} | Vol>120%: ${this._lastDebugStats.momentum.volumeAbove120} | Pass: ${this._lastDebugStats.momentum.passed}`);
     }
 
     console.log(`[universe] Momentum scan: ${results.length} signals with indicators`);

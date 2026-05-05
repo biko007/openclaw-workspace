@@ -165,8 +165,9 @@ function computeVWAP(ohlcv: OHLCV[]): number | null {
 export function checkMomentumSignal(indicators: IndicatorValues): SignalResult {
   const reasons: string[] = [];
   let score = 0;
+  let conditionsMet = 0;
 
-  // 1. EMA9 crosses EMA21 from below (Golden Cross)
+  // Condition 1: EMA bullish (EMA9 > EMA21, bonus for fresh cross)
   const emaCross =
     indicators.ema9 !== null &&
     indicators.ema21 !== null &&
@@ -175,7 +176,6 @@ export function checkMomentumSignal(indicators: IndicatorValues): SignalResult {
     indicators.prevEma9 <= indicators.prevEma21 &&
     indicators.ema9 > indicators.ema21;
 
-  // Also accept EMA9 > EMA21 (already crossed, trend in progress)
   const emaBullish =
     indicators.ema9 !== null &&
     indicators.ema21 !== null &&
@@ -183,18 +183,22 @@ export function checkMomentumSignal(indicators: IndicatorValues): SignalResult {
 
   if (emaCross) {
     score += 40;
+    conditionsMet++;
     reasons.push("EMA9/21 golden cross");
   } else if (emaBullish) {
     score += 20;
+    conditionsMet++;
     reasons.push("EMA9 > EMA21 (bullish trend)");
   } else {
     reasons.push("EMA bearish");
   }
 
-  // 2. RSI between 50-70 (momentum but not overbought)
+  // Condition 2: RSI in momentum zone (50-70)
+  const rsiInZone = indicators.rsi !== null && indicators.rsi >= 50 && indicators.rsi <= 70;
   if (indicators.rsi !== null) {
-    if (indicators.rsi >= 50 && indicators.rsi <= 70) {
+    if (rsiInZone) {
       score += 30;
+      conditionsMet++;
       reasons.push(`RSI ${indicators.rsi.toFixed(1)} (momentum zone)`);
     } else if (indicators.rsi > 70) {
       reasons.push(`RSI ${indicators.rsi.toFixed(1)} (overbought)`);
@@ -203,11 +207,17 @@ export function checkMomentumSignal(indicators: IndicatorValues): SignalResult {
     }
   }
 
-  // 3. Volume > 150% of 20-bar average
+  // Condition 3: Volume > 120% of 20-bar average
+  const volumeStrong = indicators.volumeRatio !== null && indicators.volumeRatio >= 1.2;
   if (indicators.volumeRatio !== null) {
     if (indicators.volumeRatio >= 1.5) {
       score += 30;
+      conditionsMet++;
       reasons.push(`Vol ${(indicators.volumeRatio * 100).toFixed(0)}% of avg (strong)`);
+    } else if (volumeStrong) {
+      score += 20;
+      conditionsMet++;
+      reasons.push(`Vol ${(indicators.volumeRatio * 100).toFixed(0)}% of avg (elevated)`);
     } else if (indicators.volumeRatio >= 1.0) {
       score += 10;
       reasons.push(`Vol ${(indicators.volumeRatio * 100).toFixed(0)}% of avg (normal)`);
@@ -216,11 +226,8 @@ export function checkMomentumSignal(indicators: IndicatorValues): SignalResult {
     }
   }
 
-  // Pass requires: EMA cross/bullish + RSI in range + volume confirmation
-  const pass = emaCross
-    ? (indicators.rsi !== null && indicators.rsi >= 50 && indicators.rsi <= 70) &&
-      (indicators.volumeRatio !== null && indicators.volumeRatio >= 1.5)
-    : false;
+  // Pass requires: at least 2 of 3 conditions met, with EMA bullish or cross required
+  const pass = conditionsMet >= 2 && (emaCross || emaBullish);
 
   return {
     pass,
@@ -232,50 +239,136 @@ export function checkMomentumSignal(indicators: IndicatorValues): SignalResult {
 export function checkMeanReversionSignal(indicators: IndicatorValues): SignalResult {
   const reasons: string[] = [];
   let score = 0;
+  let conditionsMet = 0;
 
-  // 1. RSI < 30 (oversold)
-  let rsiOversold = false;
+  // 1. RSI < 35 (oversold zone)
+  const rsiOversold = indicators.rsi !== null && indicators.rsi < 35;
   if (indicators.rsi !== null) {
     if (indicators.rsi < 30) {
-      rsiOversold = true;
-      score += 35;
-      reasons.push(`RSI ${indicators.rsi.toFixed(1)} (oversold)`);
+      conditionsMet++;
+      score += 40;
+      reasons.push(`RSI ${indicators.rsi.toFixed(1)} (deeply oversold)`);
+    } else if (indicators.rsi < 35) {
+      conditionsMet++;
+      score += 30;
+      reasons.push(`RSI ${indicators.rsi.toFixed(1)} (oversold zone)`);
     } else {
       reasons.push(`RSI ${indicators.rsi.toFixed(1)} (not oversold)`);
     }
   }
 
-  // 2. Price below lower Bollinger Band
-  let belowBB = false;
-  if (indicators.bb_lower !== null) {
+  // 2. Price below BB lower OR in lower third of BB range
+  let bbOversold = false;
+  if (indicators.bb_lower !== null && indicators.bb_upper !== null) {
+    const bbRange = indicators.bb_upper - indicators.bb_lower;
+    const lowerThird = indicators.bb_lower + bbRange / 3;
     if (indicators.price < indicators.bb_lower) {
-      belowBB = true;
+      bbOversold = true;
+      conditionsMet++;
       score += 35;
       reasons.push(`Price ${indicators.price.toFixed(2)} < BB lower ${indicators.bb_lower.toFixed(2)}`);
+    } else if (indicators.price < lowerThird) {
+      bbOversold = true;
+      conditionsMet++;
+      score += 25;
+      reasons.push(`Price in lower BB third (${indicators.price.toFixed(2)} < ${lowerThird.toFixed(2)})`);
     } else {
-      reasons.push(`Price above BB lower`);
+      reasons.push(`Price above BB lower third`);
     }
   }
 
-  // 3. Price > VWAP (institutional support)
-  let aboveVWAP = false;
-  if (indicators.vwap !== null) {
-    if (indicators.price > indicators.vwap) {
-      aboveVWAP = true;
-      score += 30;
-      reasons.push(`Price > VWAP ${indicators.vwap.toFixed(2)} (institutional support)`);
+  // 3. Volume confirmation (selling pressure validated)
+  if (indicators.volumeRatio !== null) {
+    if (indicators.volumeRatio >= 1.2) {
+      conditionsMet++;
+      score += 25;
+      reasons.push(`Vol ${(indicators.volumeRatio * 100).toFixed(0)}% (selling exhaustion likely)`);
     } else {
-      reasons.push(`Price < VWAP (no institutional support)`);
+      reasons.push(`Vol ${(indicators.volumeRatio * 100).toFixed(0)}% (low conviction)`);
     }
   }
 
-  const pass = rsiOversold && belowBB && aboveVWAP;
+  // Pass requires: RSI oversold + at least one other condition
+  const pass = rsiOversold && conditionsMet >= 2;
 
   return {
     pass,
     strength: score,
     details: reasons.join(" | "),
   };
+}
+
+// ── Debug Statistics ──
+
+export interface ScanDebugStats {
+  totalAnalyzed: number;
+  momentum: {
+    emaBullish: number;
+    emaCross: number;
+    rsiInZone: number;
+    volumeAbove120: number;
+    passed: number;
+  };
+  meanReversion: {
+    rsiBelow35: number;
+    rsiBelow30: number;
+    belowBBLower: number;
+    inLowerThird: number;
+    volumeAbove120: number;
+    passed: number;
+  };
+  timestamp: string;
+}
+
+let lastDebugStats: ScanDebugStats | null = null;
+
+export function getLastDebugStats(): ScanDebugStats | null {
+  return lastDebugStats;
+}
+
+export function collectDebugStats(candidates: IndicatorValues[]): ScanDebugStats {
+  const stats: ScanDebugStats = {
+    totalAnalyzed: candidates.length,
+    momentum: { emaBullish: 0, emaCross: 0, rsiInZone: 0, volumeAbove120: 0, passed: 0 },
+    meanReversion: { rsiBelow35: 0, rsiBelow30: 0, belowBBLower: 0, inLowerThird: 0, volumeAbove120: 0, passed: 0 },
+    timestamp: new Date().toISOString(),
+  };
+
+  for (const ind of candidates) {
+    // Momentum conditions
+    const emaBullish = ind.ema9 !== null && ind.ema21 !== null && ind.ema9 > ind.ema21;
+    const emaCross = ind.ema9 !== null && ind.ema21 !== null && ind.prevEma9 !== null && ind.prevEma21 !== null &&
+      ind.prevEma9 <= ind.prevEma21 && ind.ema9 > ind.ema21;
+    const rsiInZone = ind.rsi !== null && ind.rsi >= 50 && ind.rsi <= 70;
+    const volAbove120 = ind.volumeRatio !== null && ind.volumeRatio >= 1.2;
+
+    if (emaBullish) stats.momentum.emaBullish++;
+    if (emaCross) stats.momentum.emaCross++;
+    if (rsiInZone) stats.momentum.rsiInZone++;
+    if (volAbove120) stats.momentum.volumeAbove120++;
+
+    const momConditions = (emaBullish ? 1 : 0) + (rsiInZone ? 1 : 0) + (volAbove120 ? 1 : 0);
+    if (momConditions >= 2 && emaBullish) stats.momentum.passed++;
+
+    // Mean reversion conditions
+    const rsiBelow35 = ind.rsi !== null && ind.rsi < 35;
+    const rsiBelow30 = ind.rsi !== null && ind.rsi < 30;
+    const belowBB = ind.bb_lower !== null && ind.price < ind.bb_lower;
+    const inLowerThird = ind.bb_lower !== null && ind.bb_upper !== null &&
+      ind.price < (ind.bb_lower + (ind.bb_upper - ind.bb_lower) / 3);
+
+    if (rsiBelow35) stats.meanReversion.rsiBelow35++;
+    if (rsiBelow30) stats.meanReversion.rsiBelow30++;
+    if (belowBB) stats.meanReversion.belowBBLower++;
+    if (inLowerThird) stats.meanReversion.inLowerThird++;
+    if (volAbove120) stats.meanReversion.volumeAbove120++;
+
+    const mrConditions = (rsiBelow35 ? 1 : 0) + ((belowBB || inLowerThird) ? 1 : 0) + (volAbove120 ? 1 : 0);
+    if (rsiBelow35 && mrConditions >= 2) stats.meanReversion.passed++;
+  }
+
+  lastDebugStats = stats;
+  return stats;
 }
 
 // ── Market Safety Check ──

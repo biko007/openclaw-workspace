@@ -17,6 +17,8 @@ import {
   daysUntilEarnings,
   hasEarningsSoon,
 } from "./earnings-calendar.js";
+import { isMarketOpen, marketStatusLabel } from "./market-hours.js";
+import { AlertManager } from "./alert-manager.js";
 import {
   loadStatus,
   saveStatus,
@@ -31,6 +33,7 @@ import {
   loadUniverse,
   loadUniverseConfig,
   saveUniverseConfig,
+  appendOrder,
   loadRecentScanResults,
   loadRecentDecisions,
   loadEarningsCache,
@@ -101,6 +104,8 @@ let watchdogTimer: ReturnType<typeof setInterval> | null = null;
 let consecutiveWatchdogFailures = 0;
 let lastGatewayRestart = 0; // timestamp ms
 const GATEWAY_RESTART_COOLDOWN = 60 * 60 * 1000; // 1 hour
+const alertManager = new AlertManager(sendTelegramNotification);
+let lastMarketOpenState: boolean | null = null; // track open→closed transitions
 
 // ── Yahoo Finance for position pricing ──
 
@@ -432,71 +437,92 @@ async function restartGateway(): Promise<boolean> {
 }
 
 async function watchdogTick(): Promise<void> {
-  const problems: string[] = [];
+  const marketOpen = isMarketOpen();
+  const connected = ibkr.isConnected();
+
+  // Log market state transitions
+  if (lastMarketOpenState !== null && lastMarketOpenState !== marketOpen) {
+    console.log(`[watchdog] Markt ${marketOpen ? "geöffnet" : "geschlossen"} — ${marketStatusLabel()}`);
+  }
+  lastMarketOpenState = marketOpen;
 
   // Check 1: IBKR connected?
-  const connected = ibkr.isConnected();
   if (!connected) {
-    problems.push(`IBKR disconnected (reconnect attempts: ${ibkr.reconnectAttempts})`);
-  }
+    await alertManager.sendAlert("ibkr_disconnect", "CRITICAL", [
+      `⚠️ *Trading Agent Watchdog*`,
+      ``,
+      `IBKR disconnected`,
+      `State: ${ibkr.state}`,
+      `Reconnect-Versuche: ${ibkr.reconnectAttempts}`,
+    ].join("\n"));
 
-  // Check 2: Last scan < 10 minutes?
-  if (lastScanResult.timestamp) {
-    const scanAge = Date.now() - new Date(lastScanResult.timestamp).getTime();
-    if (scanAge > 10 * 60 * 1000) {
-      problems.push(`Last scan stale (${Math.round(scanAge / 60_000)}min ago)`);
-    }
-  }
-
-  // Check 3: Scheduler still running?
-  if (!universeManager.isScheduleRunning()) {
-    problems.push("Universe scheduler stopped");
-  }
-
-  if (problems.length === 0) {
-    if (consecutiveWatchdogFailures > 0) {
-      console.log("[watchdog] All checks passed — recovered after " + consecutiveWatchdogFailures + " failures");
-    }
-    consecutiveWatchdogFailures = 0;
-    console.log("[watchdog] OK — connected=" + connected + " scheduler=" + universeManager.isScheduleRunning());
-    return;
-  }
-
-  consecutiveWatchdogFailures++;
-  console.log(`[watchdog] Problems (${consecutiveWatchdogFailures}x): ${problems.join("; ")}`);
-
-  // Auto-reconnect if disconnected
-  if (!connected) {
+    // Auto-reconnect
     try {
       console.log("[watchdog] Triggering reconnect...");
       await ibkr.connect();
     } catch (e) {
       console.log("[watchdog] Reconnect failed:", e instanceof Error ? e.message : e);
     }
-  }
 
-  // After 3 consecutive failures: alert + gateway restart
-  if (consecutiveWatchdogFailures >= 3) {
-    const msg = [
-      `⚠️ *Trading Agent Watchdog Alert*`,
-      ``,
-      `${consecutiveWatchdogFailures} consecutive failures:`,
-      ...problems.map((p) => `• ${p}`),
-      ``,
-      `IBKR state: ${ibkr.state}`,
-      `Reconnect attempts: ${ibkr.reconnectAttempts}`,
-    ].join("\n");
+    consecutiveWatchdogFailures++;
 
-    await sendTelegramNotification(msg);
-
-    // Gateway restart after 3 failed IBKR reconnects
-    if (!connected && ibkr.reconnectAttempts >= 3) {
+    // Gateway restart after sustained disconnect
+    if (consecutiveWatchdogFailures >= 3 && ibkr.reconnectAttempts >= 3) {
       const restarted = await restartGateway();
       if (restarted) {
-        await sendTelegramNotification("🔄 *IB Gateway restarted* — waiting for reconnect...");
+        await alertManager.sendAlert("gateway_restart", "CRITICAL",
+          "🔄 *IB Gateway restarted* — waiting for reconnect...");
       }
     }
+  } else {
+    if (alertManager.isActive("ibkr_disconnect")) {
+      await alertManager.resolve("ibkr_disconnect");
+    }
   }
+
+  // Check 2: Scan stale — ONLY during market hours
+  if (marketOpen && lastScanResult.timestamp) {
+    const scanAge = Date.now() - new Date(lastScanResult.timestamp).getTime();
+    if (scanAge > 10 * 60 * 1000) {
+      await alertManager.sendAlert("scan_stale", "WARN", [
+        `⚠️ *Trading Agent Watchdog*`,
+        ``,
+        `Letzter Scan veraltet (${Math.round(scanAge / 60_000)}min)`,
+        `Scheduler: ${universeManager.isScheduleRunning() ? "läuft" : "gestoppt"}`,
+      ].join("\n"));
+    } else {
+      if (alertManager.isActive("scan_stale")) {
+        await alertManager.resolve("scan_stale");
+      }
+    }
+  } else if (!marketOpen && alertManager.isActive("scan_stale")) {
+    // Market closed — silently clear scan_stale without recovery message
+    // (resolve would send a Telegram message, we just want silence)
+  }
+
+  // Check 3: Scheduler running?
+  if (!universeManager.isScheduleRunning()) {
+    await alertManager.sendAlert("scheduler_stopped", "WARN", [
+      `⚠️ *Trading Agent Watchdog*`,
+      ``,
+      `Universe Scheduler gestoppt`,
+    ].join("\n"));
+  } else {
+    if (alertManager.isActive("scheduler_stopped")) {
+      await alertManager.resolve("scheduler_stopped");
+    }
+  }
+
+  // Track consecutive failures for gateway restart logic
+  const hasProblems = !connected || (!universeManager.isScheduleRunning());
+  if (!hasProblems) {
+    if (consecutiveWatchdogFailures > 0) {
+      console.log(`[watchdog] All checks passed — recovered after ${consecutiveWatchdogFailures} failures`);
+    }
+    consecutiveWatchdogFailures = 0;
+  }
+
+  console.log(`[watchdog] OK — connected=${connected} scheduler=${universeManager.isScheduleRunning()} market=${marketOpen ? "open" : "closed"}`);
 }
 
 // ── Health Check ──
@@ -684,6 +710,73 @@ app.get("/orders", (_req, res) => {
   res.json(orders.slice(-limit));
 });
 
+app.post("/close/:symbol", async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+
+  // Find position
+  const pos = currentStatus.positions.find((p) => p.symbol === symbol);
+  if (!pos) {
+    res.status(404).json({ error: `No open position for ${symbol}` });
+    return;
+  }
+
+  if (!ibkr.isConnected()) {
+    res.status(503).json({ error: "IBKR not connected" });
+    return;
+  }
+
+  try {
+    const result = await ibkr.placeMarketSell({
+      symbol,
+      exchange: "SMART",
+      currency: "USD",
+      quantity: pos.quantity,
+    });
+
+    // Log the order
+    const orderId = `close_${symbol}_${Date.now()}`;
+    appendOrder({
+      id: orderId,
+      symbol,
+      side: "SELL",
+      quantity: pos.quantity,
+      price: result.fillPrice || 0,
+      status: "Filled",
+      timestamp: new Date().toISOString(),
+      fillPrice: result.fillPrice,
+      fillTimestamp: new Date().toISOString(),
+      orderType: "MKT",
+    });
+
+    // Calculate P&L
+    const fillPrice = result.fillPrice || 0;
+    const pnl = (fillPrice - pos.avgCost) * pos.quantity;
+    const pnlPct = pos.avgCost > 0 ? ((fillPrice - pos.avgCost) / pos.avgCost) * 100 : 0;
+    const pnlSign = pnl >= 0 ? "+" : "";
+    const emoji = pnl >= 0 ? "✅" : "❌";
+
+    // Telegram notification
+    const msg = [
+      `${emoji} *Position geschlossen*`,
+      ``,
+      `*${symbol}* — Market Order`,
+      `Entry: $${pos.avgCost.toFixed(2)} → Exit: $${fillPrice.toFixed(2)}`,
+      `P&L: ${pnlSign}$${pnl.toFixed(2)} (${pnlSign}${pnlPct.toFixed(1)}%)`,
+      `Menge: ${pos.quantity} Stk`,
+    ].join("\n");
+
+    sendTelegramNotification(msg).catch(() => {});
+
+    console.log(`[trading-agent] Closed ${symbol}: ${pos.quantity} @ $${fillPrice.toFixed(2)} | P&L: ${pnlSign}$${pnl.toFixed(2)}`);
+
+    res.json({ symbol, quantity: pos.quantity, fillPrice, pnl, avgCost: pos.avgCost });
+  } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e);
+    console.error(`[trading-agent] Close ${symbol} failed:`, errMsg);
+    res.status(500).json({ error: errMsg });
+  }
+});
+
 app.get("/decisions", (_req, res) => {
   const limit = Number((_req.query as any).limit) || 20;
   res.json(loadRecentDecisions(limit));
@@ -692,6 +785,17 @@ app.get("/decisions", (_req, res) => {
 app.get("/universe/top", (_req, res) => {
   const limit = Number((_req.query as any).limit) || 10;
   res.json(universeManager.getTopCandidates(limit));
+});
+
+// ── Debug Endpoint ──
+
+app.get("/debug/scan", (_req, res) => {
+  const stats = universeManager.lastDebugStats;
+  if (!stats) {
+    res.json({ error: "No scan data yet — wait for next scan cycle" });
+    return;
+  }
+  res.json(stats);
 });
 
 // ── Earnings Endpoints ──
@@ -764,6 +868,7 @@ async function start(): Promise<void> {
   // Initial poll — sync positions from IBKR before any trading
   await pollIBKR();
   console.log(`[trading-agent] Initial sync: ${currentStatus.positions.length} positions, cash $${currentStatus.cashBalance.toFixed(0)}, net $${currentStatus.netLiquidation.toFixed(0)}`);
+  console.log(`[trading-agent] Market: ${marketStatusLabel()}`);
 
   // Initial earnings cache refresh
   refreshEarningsCache().catch((e) =>

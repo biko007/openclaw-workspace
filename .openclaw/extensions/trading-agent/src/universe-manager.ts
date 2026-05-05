@@ -44,6 +44,7 @@ export class UniverseManager {
   private lastMomentumMin = -1;
   private lastMeanRevMin = -1;
   private _lastDebugStats: ScanDebugStats | null = null;
+  private _scanning = false;
   onMomentumScan: ((results: ScanResult[]) => Promise<void>) | null = null;
   onScanComplete: ((info: { momentum: number; meanReversion: number }) => void) | null = null;
 
@@ -147,8 +148,14 @@ export class UniverseManager {
           const volume: number = q.regularMarketVolume ?? 0;
           const price: number = q.regularMarketPrice ?? 0;
           // Volume ratio: today's volume vs 10-day average
-          const avgVol: number = q.averageDailyVolume10Day ?? 0;
+          const avgVol10d: number = q.averageDailyVolume10Day ?? 0;
+          const avgVol3m: number = q.averageDailyVolume3Month ?? 0;
+          const avgVol = avgVol10d > 0 ? avgVol10d : avgVol3m;
           const volumeRatio = avgVol > 0 ? volume / avgVol : 0;
+          // Log volume diagnostics for first 3 symbols
+          if (quotes.size < 3) {
+            console.log(`[universe] VolDiag ${origSymbol}: vol=${volume} avgVol10d=${avgVol10d} avgVol3m=${avgVol3m} → ratio=${volumeRatio.toFixed(2)}`);
+          }
           quotes.set(origSymbol, { changePct, volume, price, volumeRatio });
         }
       } catch (e) {
@@ -410,6 +417,12 @@ export class UniverseManager {
   }
 
   private async tick(): Promise<void> {
+    // Mutex: skip if previous tick is still running
+    if (this._scanning) {
+      console.log("[universe] Tick skipped: previous scan still running");
+      return;
+    }
+
     const now = new Date();
     const utcHour = now.getUTCHours();
     const utcMin = now.getUTCMinutes();
@@ -442,28 +455,42 @@ export class UniverseManager {
     let momentumCount = 0;
     let meanRevCount = 0;
     const fiveMinSlot = Math.floor(utcMin / 5);
-    if (fiveMinSlot !== this.lastMomentumMin) {
-      this.lastMomentumMin = fiveMinSlot;
-      const momentum = await this.scanMomentum();
-      momentumCount = momentum.length;
-      if (momentum.length > 0 && this.onMomentumScan) {
-        await this.onMomentumScan(momentum).catch((e) =>
-          console.error("[universe] Post-scan execution error:", e),
-        );
-      }
-    }
-
-    // Mean reversion scan every 15 minutes
+    const needMomentum = fiveMinSlot !== this.lastMomentumMin;
     const fifteenMinSlot = Math.floor(utcMin / 15);
-    if (fifteenMinSlot !== this.lastMeanRevMin) {
-      this.lastMeanRevMin = fifteenMinSlot;
-      const meanRev = await this.scanMeanReversion();
-      meanRevCount = meanRev.length;
-    }
+    const needMeanRev = fifteenMinSlot !== this.lastMeanRevMin;
 
-    // Notify scan complete
-    if (this.onScanComplete) {
-      this.onScanComplete({ momentum: momentumCount, meanReversion: meanRevCount });
+    if (!needMomentum && !needMeanRev) return;
+
+    this._scanning = true;
+    const scanStart = Date.now();
+    try {
+      if (needMomentum) {
+        this.lastMomentumMin = fiveMinSlot;
+        const momentum = await this.scanMomentum();
+        momentumCount = momentum.length;
+        if (momentum.length > 0 && this.onMomentumScan) {
+          await this.onMomentumScan(momentum).catch((e) =>
+            console.error("[universe] Post-scan execution error:", e),
+          );
+        }
+      }
+
+      // Mean reversion scan every 15 minutes
+      if (needMeanRev) {
+        this.lastMeanRevMin = fifteenMinSlot;
+        const meanRev = await this.scanMeanReversion();
+        meanRevCount = meanRev.length;
+      }
+
+      const elapsed = ((Date.now() - scanStart) / 1000).toFixed(1);
+      console.log(`[universe] Scan cycle completed in ${elapsed}s (momentum=${momentumCount}, meanRev=${meanRevCount})`);
+
+      // Notify scan complete
+      if (this.onScanComplete) {
+        this.onScanComplete({ momentum: momentumCount, meanReversion: meanRevCount });
+      }
+    } finally {
+      this._scanning = false;
     }
   }
 

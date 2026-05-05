@@ -119,8 +119,8 @@ export class UniverseManager {
 
   // ── Yahoo Finance Quote Fetching ──
 
-  private async fetchYahooQuotes(symbols: UniverseSymbol[]): Promise<Map<string, { changePct: number; volume: number; price: number }>> {
-    const quotes = new Map<string, { changePct: number; volume: number; price: number }>();
+  private async fetchYahooQuotes(symbols: UniverseSymbol[]): Promise<Map<string, { changePct: number; volume: number; price: number; volumeRatio: number }>> {
+    const quotes = new Map<string, { changePct: number; volume: number; price: number; volumeRatio: number }>();
     // Yahoo tickers: EU stocks need exchange suffix
     const tickerMap = new Map<string, string>(); // yahoo ticker → original symbol
     for (const s of symbols) {
@@ -146,7 +146,10 @@ export class UniverseManager {
           const changePct: number = q.regularMarketChangePercent ?? 0;
           const volume: number = q.regularMarketVolume ?? 0;
           const price: number = q.regularMarketPrice ?? 0;
-          quotes.set(origSymbol, { changePct, volume, price });
+          // Volume ratio: today's volume vs 10-day average
+          const avgVol: number = q.averageDailyVolume10Day ?? 0;
+          const volumeRatio = avgVol > 0 ? volume / avgVol : 0;
+          quotes.set(origSymbol, { changePct, volume, price, volumeRatio });
         }
       } catch (e) {
         console.log(`[universe] Yahoo quote batch error (chunk ${i}):`, e instanceof Error ? e.message : e);
@@ -180,8 +183,7 @@ export class UniverseManager {
       const quotes = await this.fetchYahooQuotes(universe.symbols);
       const candidates = Array.from(quotes.entries())
         .filter(([, q]) => q.changePct > 0.5 && q.volume > 50_000 && q.price > 5)
-        .sort((a, b) => b[1].changePct - a[1].changePct)
-        .slice(0, 30); // Limit API calls
+        .sort((a, b) => b[1].changePct - a[1].changePct);
 
       // Filter out earnings-blocked symbols
       const blocked = new Set(getBlockedSymbols());
@@ -202,6 +204,9 @@ export class UniverseManager {
 
           const indicators = computeIndicators(ohlcv);
           if (!indicators) continue;
+
+          // Override volumeRatio from Yahoo quote (hourly OHLCV has no volume)
+          indicators.volumeRatio = q.volumeRatio > 0 ? q.volumeRatio : indicators.volumeRatio;
 
           allIndicators.push(indicators);
           const signal = checkMomentumSignal(indicators);
@@ -303,8 +308,7 @@ export class UniverseManager {
       const quotes = await this.fetchYahooQuotes(universe.symbols);
       const candidates = Array.from(quotes.entries())
         .filter(([, q]) => q.changePct < -0.5 && q.volume > 50_000 && q.price > 5)
-        .sort((a, b) => a[1].changePct - b[1].changePct)
-        .slice(0, 30);
+        .sort((a, b) => a[1].changePct - b[1].changePct);
 
       // Filter out earnings-blocked symbols
       const blockedMR = new Set(getBlockedSymbols());
@@ -324,6 +328,9 @@ export class UniverseManager {
 
           const indicators = computeIndicators(ohlcv);
           if (!indicators) continue;
+
+          // Override volumeRatio from Yahoo quote (hourly OHLCV has no volume)
+          indicators.volumeRatio = q.volumeRatio > 0 ? q.volumeRatio : indicators.volumeRatio;
 
           const signal = checkMeanReversionSignal(indicators);
 

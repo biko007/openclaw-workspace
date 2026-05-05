@@ -186,9 +186,12 @@ export function checkMomentumSignal(indicators: IndicatorValues): SignalResult {
     conditionsMet++;
     reasons.push("EMA9/21 golden cross");
   } else if (emaBullish) {
-    score += 20;
+    // Score scales with EMA spread (stronger trend = higher score)
+    const spread = indicators.ema9! / indicators.ema21! - 1;
+    const emaScore = Math.min(10 + Math.round(spread * 500), 30); // 10-30 based on spread
+    score += emaScore;
     conditionsMet++;
-    reasons.push("EMA9 > EMA21 (bullish trend)");
+    reasons.push(`EMA9>21 +${(spread * 100).toFixed(2)}%`);
   } else {
     reasons.push("EMA bearish");
   }
@@ -197,9 +200,12 @@ export function checkMomentumSignal(indicators: IndicatorValues): SignalResult {
   const rsiInZone = indicators.rsi !== null && indicators.rsi >= 50 && indicators.rsi <= 70;
   if (indicators.rsi !== null) {
     if (rsiInZone) {
-      score += 30;
+      // Score scales: 55-65 is sweet spot (higher score), extremes get less
+      const rsiDist = Math.abs(indicators.rsi - 60); // distance from ideal 60
+      const rsiScore = Math.round(30 - rsiDist * 1.5); // 30 at 60, 15 at edges
+      score += Math.max(15, rsiScore);
       conditionsMet++;
-      reasons.push(`RSI ${indicators.rsi.toFixed(1)} (momentum zone)`);
+      reasons.push(`RSI ${indicators.rsi.toFixed(1)}`);
     } else if (indicators.rsi > 70) {
       reasons.push(`RSI ${indicators.rsi.toFixed(1)} (overbought)`);
     } else {
@@ -207,23 +213,29 @@ export function checkMomentumSignal(indicators: IndicatorValues): SignalResult {
     }
   }
 
-  // Condition 3: Volume > 120% of 20-bar average
+  // Condition 3: Volume > 120% of 10-day average
   const volumeStrong = indicators.volumeRatio !== null && indicators.volumeRatio >= 1.2;
-  if (indicators.volumeRatio !== null) {
-    if (indicators.volumeRatio >= 1.5) {
+  if (indicators.volumeRatio !== null && indicators.volumeRatio > 0) {
+    if (indicators.volumeRatio >= 2.0) {
+      score += 35;
+      conditionsMet++;
+      reasons.push(`Vol ${(indicators.volumeRatio * 100).toFixed(0)}% (surge)`);
+    } else if (indicators.volumeRatio >= 1.5) {
       score += 30;
       conditionsMet++;
-      reasons.push(`Vol ${(indicators.volumeRatio * 100).toFixed(0)}% of avg (strong)`);
+      reasons.push(`Vol ${(indicators.volumeRatio * 100).toFixed(0)}% (strong)`);
     } else if (volumeStrong) {
       score += 20;
       conditionsMet++;
-      reasons.push(`Vol ${(indicators.volumeRatio * 100).toFixed(0)}% of avg (elevated)`);
+      reasons.push(`Vol ${(indicators.volumeRatio * 100).toFixed(0)}% (elevated)`);
     } else if (indicators.volumeRatio >= 1.0) {
       score += 10;
-      reasons.push(`Vol ${(indicators.volumeRatio * 100).toFixed(0)}% of avg (normal)`);
+      reasons.push(`Vol ${(indicators.volumeRatio * 100).toFixed(0)}% (normal)`);
     } else {
-      reasons.push(`Vol ${(indicators.volumeRatio * 100).toFixed(0)}% of avg (low)`);
+      reasons.push(`Vol ${(indicators.volumeRatio * 100).toFixed(0)}% (low)`);
     }
+  } else {
+    reasons.push("Vol n/a");
   }
 
   // Pass requires: at least 2 of 3 conditions met, with EMA bullish or cross required

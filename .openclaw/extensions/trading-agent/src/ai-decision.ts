@@ -97,6 +97,23 @@ export async function evaluateTrade(
     : "Keine Entscheidungen in den letzten 24h.";
 
   const ind = candidate.indicators;
+
+  // Volume context: expected ratio depends on time of day
+  const now = new Date();
+  const utcH = now.getUTCHours();
+  const utcM = now.getUTCMinutes();
+  const minutesSinceUSOpen = (utcH - 13) * 60 + (utcM - 30); // NYSE opens 13:30 UTC
+  const tradingMinutesTotal = 390; // 6.5h trading day
+  const expectedRatio = minutesSinceUSOpen > 0
+    ? Math.min(minutesSinceUSOpen / tradingMinutesTotal, 1.0)
+    : 0;
+  const volRatio = ind?.volumeRatio ?? 0;
+  const adjustedVolRatio = expectedRatio > 0 ? volRatio / expectedRatio : volRatio;
+
+  const volumeContext = expectedRatio > 0 && expectedRatio < 0.8
+    ? `Volume Ratio (vs Tages-Durchschnitt): ${volRatio.toFixed(2)} — WICHTIG: Es sind erst ${(expectedRatio * 100).toFixed(0)}% des Handelstages vergangen. Erwarteter Ratio zu diesem Zeitpunkt: ~${expectedRatio.toFixed(2)}. Tageszeit-bereinigter Ratio: ${adjustedVolRatio.toFixed(2)} (>1.0 = überdurchschnittlich für diese Uhrzeit)`
+    : `Volume Ratio (vs Tages-Durchschnitt): ${volRatio.toFixed(2)}`;
+
   const indicatorText = ind
     ? [
         `RSI(14): ${ind.rsi?.toFixed(1) ?? "n/a"}`,
@@ -105,7 +122,7 @@ export async function evaluateTrade(
         `BB Upper: ${ind.bb_upper?.toFixed(2) ?? "n/a"}`,
         `BB Lower: ${ind.bb_lower?.toFixed(2) ?? "n/a"}`,
         `VWAP: ${ind.vwap?.toFixed(2) ?? "n/a"}`,
-        `Volume Ratio (vs 20d avg): ${ind.volumeRatio?.toFixed(2) ?? "n/a"}`,
+        volumeContext,
       ].join("\n")
     : "Keine Indikator-Daten verfügbar.";
 
@@ -139,6 +156,8 @@ Bewerte diesen Trade-Kandidaten. Berücksichtige:
 3. Aktuelle Marktbedingungen
 4. Ob wir bereits ähnliche Positionen haben
 5. Earnings-Risiko (Gap-Risiko vor Quartalszahlen)
+
+WICHTIG zum Volumen: Der Volume Ratio vergleicht bisheriges Tagesvolumen mit dem vollen 10-Tages-Durchschnitt. Früh am Tag (z.B. 30min nach Open) ist ein Ratio von 0.15-0.30 völlig normal. Nutze den tageszeit-bereinigten Ratio als Maßstab — ein bereinigter Ratio >1.0 bedeutet überdurchschnittliches Volumen für diese Uhrzeit. Lehne NICHT allein wegen niedrigem Raw-Ratio ab.
 
 Antworte NUR mit validem JSON in diesem Format:
 {

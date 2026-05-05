@@ -139,6 +139,27 @@ export class OrderExecutor {
     const isEU = symbolInfo?.currency === "EUR";
     const yahooTicker = isEU ? `${candidate.symbol}.DE` : candidate.symbol;
 
+    // Exchange hours gate: only place orders when the target exchange is open
+    const orderTime = new Date();
+    const utcH = orderTime.getUTCHours();
+    const utcM = orderTime.getUTCMinutes();
+    const utcTime = utcH * 60 + utcM;
+    if (isEU) {
+      // XETRA: 09:00–17:30 CET → ~07:00–15:30 UTC (summer), ~08:00–16:30 UTC (winter)
+      // Use conservative window: 07:00–15:30 UTC
+      if (utcTime < 7 * 60 || utcTime >= 15 * 60 + 30) {
+        console.log(`[executor] ${candidate.symbol}: XETRA closed (UTC ${utcH}:${String(utcM).padStart(2, "0")}), skipping`);
+        return null;
+      }
+    } else {
+      // NYSE/NASDAQ: 09:30–16:00 ET → 13:30–20:00 UTC (summer), 14:30–21:00 UTC (winter)
+      // Use conservative window: 13:30–20:00 UTC
+      if (utcTime < 13 * 60 + 30 || utcTime >= 20 * 60) {
+        console.log(`[executor] ${candidate.symbol}: NYSE/NASDAQ closed (UTC ${utcH}:${String(utcM).padStart(2, "0")}), skipping`);
+        return null;
+      }
+    }
+
     let currentPrice: number;
     try {
       const quote: any = await yahooFinance.quote(yahooTicker);
@@ -182,8 +203,21 @@ export class OrderExecutor {
       return null;
     }
 
-    // Round to valid tick size (0.01 for most stocks)
-    const roundTick = (p: number) => Math.round(p * 100) / 100;
+    // Round to valid tick size per exchange rules
+    // XETRA tick sizes: <10€ = 0.001, <50€ = 0.005, <100€ = 0.01, <500€ = 0.05, ≥500€ = 0.1
+    // US stocks: 0.01 for all
+    const getTickSize = (price: number): number => {
+      if (!isEU) return 0.01;
+      if (price < 10) return 0.001;
+      if (price < 50) return 0.005;
+      if (price < 100) return 0.01;
+      if (price < 500) return 0.05;
+      return 0.1;
+    };
+    const roundTick = (p: number) => {
+      const tick = getTickSize(p);
+      return Math.round(p / tick) * tick;
+    };
 
     // Use AI-suggested levels if valid, otherwise calculate defaults
     let limitPrice = roundTick(currentPrice * 1.001);

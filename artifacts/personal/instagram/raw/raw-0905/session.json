@@ -1,0 +1,92 @@
+{
+  "id": "raw-0905",
+  "created_at": "2026-05-09T08:51:41.091Z",
+  "mode": "upload",
+  "status": "crafting",
+  "files": [
+    {
+      "name": "file_65---d2ca4274-42e6-461d-9d1c-647fa2928900.jpg",
+      "size": 66940,
+      "type": "image",
+      "addedAt": "2026-05-09T08:51:41.092Z"
+    },
+    {
+      "name": "file_66---9bee1e19-07da-4f52-a2a4-e555d457bde8.jpg",
+      "size": 209446,
+      "type": "image",
+      "addedAt": "2026-05-09T08:53:37.327Z"
+    },
+    {
+      "name": "file_55---b998a821-4707-47dd-aab6-5136ecd0cd14.jpg",
+      "size": 191280,
+      "type": "image",
+      "addedAt": "2026-05-09T08:53:54.586Z"
+    },
+    {
+      "name": "file_58---883cee39-5768-4307-b0de-abc21385cd5b.jpg",
+      "size": 143817,
+      "type": "image",
+      "addedAt": "2026-05-09T08:54:12.636Z"
+    },
+    {
+      "name": "file_61---7fdeaf74-9bf8-4288-ba36-f21641d519da.jpg",
+      "size": 158514,
+      "type": "image",
+      "addedAt": "2026-05-09T08:54:18.286Z"
+    },
+    {
+      "name": "file_60---1f06dd6d-8103-49a4-86b8-efa2609d5011.jpg",
+      "size": 240815,
+      "type": "image",
+      "addedAt": "2026-05-09T08:54:26.604Z"
+    },
+    {
+      "name": "file_57---206d3dbe-46c3-430e-b253-6213591e954c.jpg",
+      "size": 191164,
+      "type": "image",
+      "addedAt": "2026-05-09T08:54:32.838Z"
+    },
+    {
+      "name": "file_54---d1336a65-b5dd-46d3-a3d1-4fd7931f0473.jpg",
+      "size": 214453,
+      "type": "image",
+      "addedAt": "2026-05-09T08:54:52.531Z"
+    },
+    {
+      "name": "file_62---a1cedb7f-fb54-45ac-a1b0-c70e4a5a4f10.jpg",
+      "size": 153075,
+      "type": "image",
+      "addedAt": "2026-05-09T08:54:59.548Z"
+    },
+    {
+      "name": "file_59---5d58abf9-35d6-41f2-aeb4-2a8c67422f24.jpg",
+      "size": 254336,
+      "type": "image",
+      "addedAt": "2026-05-09T08:55:07.739Z"
+    },
+    {
+      "name": "file_67---eef59b2e-5947-42cf-ab78-9125d69589cc.mp4",
+      "size": 2150533,
+      "type": "video",
+      "addedAt": "2026-05-09T08:55:30.687Z"
+    },
+    {
+      "name": "file_68---1a53f883-fa30-4bb8-823a-37e46582bd43.mp4",
+      "size": 1097244,
+      "type": "video",
+      "addedAt": "2026-05-09T08:55:47.803Z"
+    },
+    {
+      "name": "file_69---c672fd8c-ba98-4930-9cb8-a9c333e47c82.mp4",
+      "size": 3140258,
+      "type": "video",
+      "addedAt": "2026-05-09T08:55:55.180Z"
+    },
+    {
+      "name": "file_70---425209e3-344f-4380-92d3-f42aca7600ca.mp4",
+      "size": 1583085,
+      "type": "video",
+      "addedAt": "2026-05-09T08:56:03.060Z"
+    }
+  ]
+}

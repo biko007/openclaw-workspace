@@ -1,0 +1,85 @@
+{
+  "id": "sub-bvcw-0605",
+  "media": [
+    {
+      "type": "image",
+      "path": "/home/biko/.openclaw/workspace/artifacts/personal/instagram/inbox/media/sub-bvcw-0605/sub-bvcw-0605.jpg",
+      "mimeType": "image/jpeg"
+    }
+  ],
+  "context": {
+    "user_note": "Testbild BvCW"
+  },
+  "status": "approved",
+  "created": "2026-05-06T14:10:55.740Z",
+  "analysis": {
+    "subjects": [
+      "three people",
+      "networking event",
+      "cocktail reception",
+      "business professionals",
+      "flowers",
+      "drinks"
+    ],
+    "mood": "celebratory",
+    "setting": "modern event venue",
+    "composition": "group portrait at cocktail table",
+    "colors": [
+      "green",
+      "white",
+      "black",
+      "gray",
+      "colorful floral patterns"
+    ],
+    "narrative_hooks": [
+      "professional networking",
+      "business celebration",
+      "elegant gathering",
+      "industry event"
+    ],
+    "visual_quality": "high",
+    "pillar_match": [
+      "culture",
+      "style"
+    ]
+  },
+  "variants": [
+    {
+      "type": "story",
+      "caption": "Good conversations happen when people actually want to be there.\n\nLast night's gathering reminded me why I prefer smaller industry events over massive conferences. Three meaningful exchanges beat thirty surface-level handshakes.\n\nThe best part wasn't the elegant venue or perfect lighting — it was watching genuine curiosity spark between people who usually only connect via LinkedIn.\n\nNot advice. Just observation.",
+      "hashtags": [
+        "#networking",
+        "#businessculture",
+        "#qualityoverquantity",
+        "#industryevents",
+        "#genuineconnections"
+      ],
+      "hook": "Good conversations happen when people actually want to be there."
+    },
+    {
+      "type": "insight",
+      "caption": "The future of business networking isn't about collecting more contacts.\n\nIt's about creating spaces where genuine curiosity can flourish. Where people share ideas, not just elevator pitches. Where the conversation continues beyond the event.\n\nTechnology gives us infinite ways to connect. But nothing replaces the energy of being in the same room with people who are building something interesting.\n\nWorth thinking about.",
+      "hashtags": [
+        "#futureofindustry",
+        "#networking",
+        "#businessculture",
+        "#innovation",
+        "#humanconnection",
+        "#technology"
+      ],
+      "hook": "The future of business networking isn't about collecting more contacts."
+    },
+    {
+      "type": "hook",
+      "caption": "Why do the best business conversations always happen away from the main stage?\n\nThree people, good drinks, genuine interest in each other's work. No scripts, no sales pitches, just curiosity about what drives people forward.\n\nThe elegant setting doesn't hurt, but it's the mindset that makes the difference.\n\nCalmly optimistic about where these conversations lead.",
+      "hashtags": [
+        "#networking",
+        "#businessstyle",
+        "#qualityconversations",
+        "#industryculture"
+      ],
+      "hook": "Why do the best business conversations always happen away from the main stage?"
+    }
+  ],
+  "selected_variant": 0
+}

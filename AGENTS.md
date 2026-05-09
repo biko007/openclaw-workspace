@@ -113,6 +113,72 @@ Reactions are lightweight social signals. Humans use them constantly — they sa
 
 **Don't overdo it:** One reaction per message max. Pick the one that fits best.
 
+## Instagram Commands — STRICT RULES
+
+These rules override all other behavior. Follow them exactly.
+
+### /instasubmit
+
+When the user sends `/instasubmit` (with or without a photo/video):
+- **NEVER** call `/instadraft`. The `/instasubmit` pipeline handles everything.
+- **NEVER** create Instagram draft JSON files directly (no file writes to `artifacts/personal/instagram/drafts/`).
+- **NEVER** interpret the photo/video and generate a caption or draft on your own.
+- Your ONLY job: confirm receipt. Say something like "Wird verarbeitet via /instasubmit." and nothing else.
+- The plugin handles media detection, Vision analysis, and submission storage automatically.
+
+### /instadraft
+
+- `/instadraft` is for manually creating text-based drafts from the Content-Kalender or free text.
+- **NEVER** call `/instadraft` as a response to a user sending a photo or video.
+- **NEVER** create draft JSON files directly — always use the `/instadraft` command.
+
+### /instavariants
+
+- `/instavariants <submission-id>` is a registered command. The plugin handler responds automatically.
+- **NEVER** claim this command does not exist. Just let the handler respond.
+
+### /instaapprove
+
+- `/instaapprove <submission-id> <1|2|3>` is a registered command that accepts two arguments.
+- **NEVER** replace it with `/instaedit`, `/instadraft`, or any other command.
+- **NEVER** claim this command does not exist. The plugin handler responds automatically.
+- **NEVER** try to approve a variant yourself — just pass the command through.
+
+### General Rule for ALL Registered Commands
+
+When a message starts with `/` and the command name matches a registered plugin command:
+- **Reply with exactly `NO_REPLY`** — the command handler responds automatically.
+- **NEVER** generate your own response, explanation, or confirmation.
+- **NEVER** claim a command "does not exist" or suggest alternatives.
+- Any response other than `NO_REPLY` for registered commands is an error.
+
+Registered commands include (not exhaustive):
+`/instasubmit`, `/instadraft`, `/instadrafts`, `/instaedit`, `/instaplan`,
+`/instavariants`, `/instaapprove`, `/instapost`, `/instastyle`, `/instasync`,
+`/insta`, `/instatop`, `/instatrend`, `/fleet`, `/fleetadd`, `/fleetshow`,
+`/fleetedit`, `/trade`, `/tradepos`, `/briefing`, `/scanmail`, `/browse`,
+`/pe`, `/link`, `/spdocs`, `/healthtrend`, `/healthalerts`
+
+### General Instagram Rules
+
+- All Instagram draft files MUST be created through the `/instadraft` command, never by writing JSON files directly.
+- Draft IDs are generated automatically by the system. Never invent or fabricate draft IDs.
+
+### Instagram im freien Chat — Keine Versprechen!
+
+Wenn der User im freien Gespräch über Instagram-Posting, Content-Erstellung oder ähnliches spricht:
+
+- **NIEMALS** behaupten du könntest "direkt auf Instagram posten", "Fotos hochladen" oder "Stories erstellen".
+- **NIEMALS** freie Captions, Hashtags oder Posting-Strategien improvisieren.
+- **IMMER** auf den strukturierten Workflow hinweisen:
+  1. `/instasubmit <text>` — Foto/Video mit Caption einreichen → Vision-Analyse + automatische Bewertung
+  2. `/instavariants <id>` — KI-generierte Caption-Varianten abrufen
+  3. `/instaapprove <id> <1|2|3>` — Variante freigeben → Draft wird erstellt
+  4. `/instapost <id>` — Freigegebenen Draft posten
+- Du kannst den Workflow erklären und bei der Formulierung der Caption für `/instasubmit` helfen.
+- Du kannst den Content-Kalender besprechen (`/instaplan`).
+- Aber: **kein direktes Posting, kein Umgehen des Workflows, keine erfundenen Fähigkeiten.**
+
 ## Tools
 
 Skills provide your tools. When you need one, check its `SKILL.md`. Keep local notes (camera names, SSH details, voice preferences) in `TOOLS.md`.

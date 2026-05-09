@@ -1,0 +1,124 @@
+{
+  "mode": 3,
+  "connected": true,
+  "paperMode": true,
+  "account": "DUP514636",
+  "positions": [
+    {
+      "symbol": "SAP",
+      "exchange": "IBIS",
+      "currency": "EUR",
+      "quantity": 587,
+      "avgCost": 152.51150735,
+      "marketPrice": 146.2,
+      "marketValue": 85819.4,
+      "unrealizedPnl": -3704.8548144499996,
+      "realizedPnl": 0
+    },
+    {
+      "symbol": "VOW3",
+      "exchange": "IBIS",
+      "currency": "EUR",
+      "quantity": 339,
+      "avgCost": 87.8878,
+      "marketPrice": 87.62,
+      "marketValue": 29703.18,
+      "unrealizedPnl": -90.78419999999798,
+      "realizedPnl": 0
+    },
+    {
+      "symbol": "VNA",
+      "exchange": "IBIS",
+      "currency": "EUR",
+      "quantity": 1300,
+      "avgCost": 22.972334,
+      "marketPrice": 22.24,
+      "marketValue": 28911.999999999996,
+      "unrealizedPnl": -952.0342000000021,
+      "realizedPnl": 0
+    },
+    {
+      "symbol": "BMW",
+      "exchange": "IBIS",
+      "currency": "EUR",
+      "quantity": 365,
+      "avgCost": 81.57096905,
+      "marketPrice": 81.82,
+      "marketValue": 29864.3,
+      "unrealizedPnl": 90.89629674999671,
+      "realizedPnl": 0
+    },
+    {
+      "symbol": "QCOM",
+      "exchange": "NASDAQ",
+      "currency": "USD",
+      "quantity": 443,
+      "avgCost": 201.84500295,
+      "marketPrice": 219.09,
+      "marketValue": 97056.87,
+      "unrealizedPnl": 7639.533693149998,
+      "realizedPnl": 0
+    },
+    {
+      "symbol": "DTG",
+      "exchange": "IBIS",
+      "currency": "EUR",
+      "quantity": 676,
+      "avgCost": 44.20416005,
+      "marketPrice": 40.42,
+      "marketValue": 27323.920000000002,
+      "unrealizedPnl": -2558.092193799998,
+      "realizedPnl": 0
+    },
+    {
+      "symbol": "INTC",
+      "exchange": "NASDAQ",
+      "currency": "USD",
+      "quantity": 264,
+      "avgCost": 112.96500305,
+      "marketPrice": 124.92,
+      "marketValue": 32978.88,
+      "unrealizedPnl": 3156.1191947999987,
+      "realizedPnl": 0
+    },
+    {
+      "symbol": "DBK",
+      "exchange": "IBIS",
+      "currency": "EUR",
+      "quantity": 1093,
+      "avgCost": 27.25256845,
+      "marketPrice": 27.165,
+      "marketValue": 29691.344999999998,
+      "unrealizedPnl": -95.71231584999904,
+      "realizedPnl": 0
+    },
+    {
+      "symbol": "ENR",
+      "exchange": "IBIS",
+      "currency": "EUR",
+      "quantity": 241,
+      "avgCost": 185.57185935,
+      "marketPrice": 178.14,
+      "marketValue": 42931.74,
+      "unrealizedPnl": -1791.078103350006,
+      "realizedPnl": 0
+    },
+    {
+      "symbol": "HEI",
+      "exchange": "IBIS",
+      "currency": "EUR",
+      "quantity": 154,
+      "avgCost": 192.2141,
+      "marketPrice": 183.8,
+      "marketValue": 28305.2,
+      "unrealizedPnl": -1295.7713999999985,
+      "realizedPnl": 0
+    }
+  ],
+  "dailyPnl": 0,
+  "unrealizedPnl": 398.22195724999256,
+  "realizedPnl": 0,
+  "netLiquidation": 990306.11,
+  "cashBalance": 447843.86,
+  "timestamp": "2026-05-09T07:03:24.852Z"
+}

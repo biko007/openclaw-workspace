@@ -106,6 +106,8 @@ let lastGatewayRestart = 0; // timestamp ms
 const GATEWAY_RESTART_COOLDOWN = 60 * 60 * 1000; // 1 hour
 const alertManager = new AlertManager(sendTelegramNotification);
 let lastMarketOpenState: boolean | null = null; // track open→closed transitions
+let marketOpenedAt = 0; // timestamp ms when market last transitioned to open
+const SCAN_GRACE_PERIOD = 20 * 60 * 1000; // 20 min grace after market open (covers 15min safety + scan duration)
 
 // ── Yahoo Finance for position pricing ──
 
@@ -440,9 +442,12 @@ async function watchdogTick(): Promise<void> {
   const marketOpen = isMarketOpen();
   const connected = ibkr.isConnected();
 
-  // Log market state transitions
+  // Log market state transitions and track open timestamp
   if (lastMarketOpenState !== null && lastMarketOpenState !== marketOpen) {
     console.log(`[watchdog] Markt ${marketOpen ? "geöffnet" : "geschlossen"} — ${marketStatusLabel()}`);
+    if (marketOpen) {
+      marketOpenedAt = Date.now();
+    }
   }
   lastMarketOpenState = marketOpen;
 
@@ -480,8 +485,9 @@ async function watchdogTick(): Promise<void> {
     }
   }
 
-  // Check 2: Scan stale — ONLY during market hours
-  if (marketOpen && lastScanResult.timestamp) {
+  // Check 2: Scan stale — ONLY during market hours, with grace period after open
+  const inGracePeriod = marketOpenedAt > 0 && (Date.now() - marketOpenedAt) < SCAN_GRACE_PERIOD;
+  if (marketOpen && !inGracePeriod && lastScanResult.timestamp) {
     const scanAge = Date.now() - new Date(lastScanResult.timestamp).getTime();
     if (scanAge > 10 * 60 * 1000) {
       await alertManager.sendAlert("scan_stale", "WARN", [
@@ -494,6 +500,11 @@ async function watchdogTick(): Promise<void> {
       if (alertManager.isActive("scan_stale")) {
         await alertManager.resolve("scan_stale");
       }
+    }
+  } else if (marketOpen && inGracePeriod) {
+    // Grace period after market open — safety window blocks scans, don't alert
+    if (alertManager.isActive("scan_stale")) {
+      await alertManager.resolve("scan_stale");
     }
   } else if (!marketOpen && alertManager.isActive("scan_stale")) {
     // Market closed — silently clear scan_stale without recovery message
@@ -879,6 +890,12 @@ async function start(): Promise<void> {
   pollTimer = setInterval(() => {
     pollIBKR().catch((e) => console.error("[trading-agent] Poll error:", e));
   }, POLL_INTERVAL);
+
+  // If market is already open at startup, set grace period to avoid stale-scan false alarm
+  if (isMarketOpen()) {
+    marketOpenedAt = Date.now();
+    console.log("[watchdog] Market already open at startup — grace period active");
+  }
 
   // Start watchdog (every 5 minutes)
   watchdogTimer = setInterval(() => {

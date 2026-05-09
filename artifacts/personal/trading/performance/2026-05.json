@@ -1,0 +1,65 @@
+[
+  {
+    "date": "2026-05-01",
+    "dailyPnl": 0,
+    "realizedPnl": 0,
+    "unrealizedPnl": 0,
+    "netLiquidation": 990306.11
+  },
+  {
+    "date": "2026-05-02",
+    "dailyPnl": 0,
+    "realizedPnl": 0,
+    "unrealizedPnl": 0,
+    "netLiquidation": 990306.11
+  },
+  {
+    "date": "2026-05-03",
+    "dailyPnl": 0,
+    "realizedPnl": 0,
+    "unrealizedPnl": 0,
+    "netLiquidation": 990306.11
+  },
+  {
+    "date": "2026-05-04",
+    "dailyPnl": 0,
+    "realizedPnl": 0,
+    "unrealizedPnl": 12603.174100499984,
+    "netLiquidation": 990306.11
+  },
+  {
+    "date": "2026-05-05",
+    "dailyPnl": 0,
+    "realizedPnl": 0,
+    "unrealizedPnl": 12603.174100499984,
+    "netLiquidation": 990306.11
+  },
+  {
+    "date": "2026-05-06",
+    "dailyPnl": 0,
+    "realizedPnl": 0,
+    "unrealizedPnl": -631.1318740999902,
+    "netLiquidation": 990306.11
+  },
+  {
+    "date": "2026-05-07",
+    "dailyPnl": 0,
+    "realizedPnl": 0,
+    "unrealizedPnl": -5156.703017549976,
+    "netLiquidation": 990306.11
+  },
+  {
+    "date": "2026-05-08",
+    "dailyPnl": 0,
+    "realizedPnl": 0,
+    "unrealizedPnl": 398.22195724999256,
+    "netLiquidation": 990306.11
+  },
+  {
+    "date": "2026-05-09",
+    "dailyPnl": 0,
+    "realizedPnl": 0,
+    "unrealizedPnl": 398.22195724999256,
+    "netLiquidation": 990306.11
+  }
+]

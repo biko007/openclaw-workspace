@@ -1,0 +1,494 @@
+{
+  "entries": [
+    {
+      "symbol": "ADS",
+      "earningsDate": "+058547-11",
+      "epsEstimate": 9.38695
+    },
+    {
+      "symbol": "AIR",
+      "earningsDate": "+058545-02"
+    },
+    {
+      "symbol": "ALV",
+      "earningsDate": "+058334-04",
+      "epsEstimate": 31.07443
+    },
+    {
+      "symbol": "BAS",
+      "earningsDate": "+058545-02",
+      "epsEstimate": 2.56504
+    },
+    {
+      "symbol": "BAYN",
+      "earningsDate": "+058331-08",
+      "epsEstimate": 4.25517
+    },
+    {
+      "symbol": "BEI",
+      "earningsDate": "+058274-02",
+      "epsEstimate": 4.28108
+    },
+    {
+      "symbol": "BMW",
+      "earningsDate": "+058547-11",
+      "epsEstimate": 10.79214
+    },
+    {
+      "symbol": "BNR",
+      "earningsDate": "+058334-04",
+      "epsEstimate": 3.69291
+    },
+    {
+      "symbol": "CBK",
+      "earningsDate": "+058320-08",
+      "epsEstimate": 3.03435
+    },
+    {
+      "symbol": "CON",
+      "earningsDate": "+058561-07",
+      "epsEstimate": 6.60462
+    },
+    {
+      "symbol": "1COV",
+      "earningsDate": "+058126-05",
+      "epsEstimate": -0.16844
+    },
+    {
+      "symbol": "DB1",
+      "earningsDate": "+058525-12",
+      "epsEstimate": 12.39491
+    },
+    {
+      "symbol": "DBK",
+      "earningsDate": "+058544-01",
+      "epsEstimate": 3.29434
+    },
+    {
+      "symbol": "DHL",
+      "earningsDate": "+058298-09",
+      "epsEstimate": 3.30496
+    },
+    {
+      "symbol": "DTE",
+      "earningsDate": "+058334-04",
+      "epsEstimate": 2.1977
+    },
+    {
+      "symbol": "DTG",
+      "earningsDate": "+058569-10",
+      "epsEstimate": 3.56304
+    },
+    {
+      "symbol": "ENR",
+      "earningsDate": "+058331-08",
+      "epsEstimate": 4.14826
+    },
+    {
+      "symbol": "FRE",
+      "earningsDate": "+058315-02",
+      "epsEstimate": 3.58037
+    },
+    {
+      "symbol": "HEI",
+      "earningsDate": "+058547-11",
+      "epsEstimate": 13.34793
+    },
+    {
+      "symbol": "HEN3",
+      "earningsDate": "+058567-01",
+      "epsEstimate": 5.41183
+    },
+    {
+      "symbol": "HNR1",
+      "earningsDate": "+058328-11",
+      "epsEstimate": 23.0691
+    },
+    {
+      "symbol": "IFX",
+      "earningsDate": "+058564-04",
+      "epsEstimate": 1.73903
+    },
+    {
+      "symbol": "MBG",
+      "earningsDate": "+058542-05",
+      "epsEstimate": 6.06494
+    },
+    {
+      "symbol": "MRK",
+      "earningsDate": "+058334-04",
+      "epsEstimate": 7.75478
+    },
+    {
+      "symbol": "MTX",
+      "earningsDate": "+058547-11",
+      "epsEstimate": 18.63254
+    },
+    {
+      "symbol": "MUV2",
+      "earningsDate": "+058331-08",
+      "epsEstimate": 50.40878
+    },
+    {
+      "symbol": "P911",
+      "earningsDate": "+058295-12",
+      "epsEstimate": 1.75032
+    },
+    {
+      "symbol": "PAH3",
+      "earningsDate": "+058203-01",
+      "epsEstimate": 13.79696
+    },
+    {
+      "symbol": "QIA",
+      "earningsDate": "+058315-02",
+      "epsEstimate": 2.09239
+    },
+    {
+      "symbol": "RHM",
+      "earningsDate": "+058567-01",
+      "epsEstimate": 34.9125
+    },
+    {
+      "symbol": "RWE",
+      "earningsDate": "+058334-04",
+      "epsEstimate": 2.67922
+    },
+    {
+      "symbol": "SAP",
+      "earningsDate": "+058528-09",
+      "epsEstimate": 7.23805
+    },
+    {
+      "symbol": "SHL",
+      "earningsDate": "+058550-08",
+      "epsEstimate": 2.31154
+    },
+    {
+      "symbol": "SIE",
+      "earningsDate": "+058334-04",
+      "epsEstimate": 11.31076
+    },
+    {
+      "symbol": "SY1",
+      "earningsDate": "+058142-10",
+      "epsEstimate": 3.92313
+    },
+    {
+      "symbol": "VNA",
+      "earningsDate": "+058564-04",
+      "epsEstimate": 1.81748
+    },
+    {
+      "symbol": "VOW3",
+      "earningsDate": "+058531-06",
+      "epsEstimate": 19.94529
+    },
+    {
+      "symbol": "ZAL",
+      "earningsDate": "+058561-07",
+      "epsEstimate": 1.52664
+    },
+    {
+      "symbol": "HFG",
+      "earningsDate": "+058315-02",
+      "epsEstimate": 0.40189
+    },
+    {
+      "symbol": "GOOG",
+      "earningsDate": "+058296-07",
+      "epsEstimate": 13.95197
+    },
+    {
+      "symbol": "GOOGL",
+      "earningsDate": "+058296-07",
+      "epsEstimate": 13.95197
+    },
+    {
+      "symbol": "GS",
+      "earningsDate": "+058503-09",
+      "epsEstimate": 59.18151
+    },
+    {
+      "symbol": "HD",
+      "earningsDate": "+058350-05",
+      "epsEstimate": 15.0526
+    },
+    {
+      "symbol": "HON",
+      "earningsDate": "+058279-03",
+      "epsEstimate": 10.5273
+    },
+    {
+      "symbol": "IBM",
+      "earningsDate": "+058526-06",
+      "epsEstimate": 12.42947
+    },
+    {
+      "symbol": "INTC",
+      "earningsDate": "+058280-01",
+      "epsEstimate": 1.08417
+    },
+    {
+      "symbol": "INTU",
+      "earningsDate": "+058354-01",
+      "epsEstimate": 23.2242
+    },
+    {
+      "symbol": "ISRG",
+      "earningsDate": "+058274-08",
+      "epsEstimate": 10.41054
+    },
+    {
+      "symbol": "JNJ",
+      "earningsDate": "+058506-06",
+      "epsEstimate": 11.57529
+    },
+    {
+      "symbol": "JPM",
+      "earningsDate": "+058503-09",
+      "epsEstimate": 22.32918
+    },
+    {
+      "symbol": "KO",
+      "earningsDate": "+058292-11",
+      "epsEstimate": 3.26263
+    },
+    {
+      "symbol": "LIN",
+      "earningsDate": "+058301-02",
+      "epsEstimate": 17.95
+    },
+    {
+      "symbol": "LLY",
+      "earningsDate": "+058563-12",
+      "epsEstimate": 35.879
+    },
+    {
+      "symbol": "LMT",
+      "earningsDate": "+058279-03",
+      "epsEstimate": 29.85463
+    },
+    {
+      "symbol": "LOW",
+      "earningsDate": "+058353-02",
+      "epsEstimate": 12.61879
+    },
+    {
+      "symbol": "MA",
+      "earningsDate": "+058298-05",
+      "epsEstimate": 19.65074
+    },
+    {
+      "symbol": "MCD",
+      "earningsDate": "+058317-07",
+      "epsEstimate": 13.35
+    },
+    {
+      "symbol": "MDLZ",
+      "earningsDate": "+058293-10",
+      "epsEstimate": 3.05601
+    },
+    {
+      "symbol": "MDT",
+      "earningsDate": "+058391-06",
+      "epsEstimate": 5.53468
+    },
+    {
+      "symbol": "MET",
+      "earningsDate": "+058315-09",
+      "epsEstimate": 9.88284
+    },
+    {
+      "symbol": "META",
+      "earningsDate": "+058296-07",
+      "epsEstimate": 32.01814
+    },
+    {
+      "symbol": "MMM",
+      "earningsDate": "+058273-09",
+      "epsEstimate": 8.69088
+    },
+    {
+      "symbol": "MO",
+      "earningsDate": "+058547-07",
+      "epsEstimate": 5.66508
+    },
+    {
+      "symbol": "MRK",
+      "earningsDate": "+058561-03",
+      "epsEstimate": 5.00581
+    },
+    {
+      "symbol": "MS",
+      "earningsDate": "+058506-06",
+      "epsEstimate": 11.8496
+    },
+    {
+      "symbol": "MSFT",
+      "earningsDate": "+058296-07",
+      "epsEstimate": 16.85079
+    },
+    {
+      "symbol": "NEE",
+      "earningsDate": "+058279-03",
+      "epsEstimate": 4.02028
+    },
+    {
+      "symbol": "NFLX",
+      "earningsDate": "+058260-11",
+      "epsEstimate": 3.59791
+    },
+    {
+      "symbol": "NKE",
+      "earningsDate": "+058217-02",
+      "epsEstimate": 1.49402
+    },
+    {
+      "symbol": "NOW",
+      "earningsDate": "+058277-05",
+      "epsEstimate": 4.1224
+    },
+    {
+      "symbol": "NVDA",
+      "earningsDate": "+058354-01",
+      "epsEstimate": 8.34076
+    },
+    {
+      "symbol": "ORCL",
+      "earningsDate": "+058159-08",
+      "epsEstimate": 7.45245
+    },
+    {
+      "symbol": "PEP",
+      "earningsDate": "+058260-01",
+      "epsEstimate": 8.65945
+    },
+    {
+      "symbol": "PFE",
+      "earningsDate": "+058312-01",
+      "epsEstimate": 2.96746
+    },
+    {
+      "symbol": "PG",
+      "earningsDate": "+058544-10",
+      "epsEstimate": 6.90017
+    },
+    {
+      "symbol": "PM",
+      "earningsDate": "+058525-08",
+      "epsEstimate": 8.4113
+    },
+    {
+      "symbol": "PYPL",
+      "earningsDate": "+058542-01",
+      "epsEstimate": 5.3054
+    },
+    {
+      "symbol": "QCOM",
+      "earningsDate": "+058296-07",
+      "epsEstimate": 10.73045
+    },
+    {
+      "symbol": "RTX",
+      "earningsDate": "+058273-09",
+      "epsEstimate": 6.90587
+    },
+    {
+      "symbol": "SBUX",
+      "earningsDate": "+058293-10",
+      "epsEstimate": 2.3849
+    },
+    {
+      "symbol": "SCHW",
+      "earningsDate": "+058260-01",
+      "epsEstimate": 6.02333
+    },
+    {
+      "symbol": "SO",
+      "earningsDate": "+058298-05",
+      "epsEstimate": 4.56811
+    },
+    {
+      "symbol": "SPG",
+      "earningsDate": "+058329-05",
+      "epsEstimate": 6.6
+    },
+    {
+      "symbol": "T",
+      "earningsDate": "+058276-06",
+      "epsEstimate": 2.31654
+    },
+    {
+      "symbol": "TGT",
+      "earningsDate": "+058353-02",
+      "epsEstimate": 8.00242
+    },
+    {
+      "symbol": "TMO",
+      "earningsDate": "+058279-03",
+      "epsEstimate": 24.88103
+    },
+    {
+      "symbol": "TMUS",
+      "earningsDate": "+058293-10",
+      "epsEstimate": 11.24014
+    },
+    {
+      "symbol": "TXN",
+      "earningsDate": "+058277-05",
+      "epsEstimate": 7.77184
+    },
+    {
+      "symbol": "UNH",
+      "earningsDate": "+058273-09",
+      "epsEstimate": 18.36484
+    },
+    {
+      "symbol": "UNP",
+      "earningsDate": "+058279-03",
+      "epsEstimate": 12.56906
+    },
+    {
+      "symbol": "UPS",
+      "earningsDate": "+058292-11",
+      "epsEstimate": 7.12046
+    },
+    {
+      "symbol": "USB",
+      "earningsDate": "+058509-03",
+      "epsEstimate": 5.10555
+    },
+    {
+      "symbol": "V",
+      "earningsDate": "+058293-10",
+      "epsEstimate": 13.09198
+    },
+    {
+      "symbol": "VZ",
+      "earningsDate": "+058290-03",
+      "epsEstimate": 4.96115
+    },
+    {
+      "symbol": "WFC",
+      "earningsDate": "+058503-09",
+      "epsEstimate": 7.00163
+    },
+    {
+      "symbol": "WMT",
+      "earningsDate": "+058355-11",
+      "epsEstimate": 2.91608
+    },
+    {
+      "symbol": "XOM",
+      "earningsDate": "+058301-02",
+      "epsEstimate": 10.7114
+    },
+    {
+      "symbol": "ZTS",
+      "earningsDate": "+058317-07",
+      "epsEstimate": 7.02721
+    }
+  ],
+  "lastUpdate": "2026-05-09T06:00:25.190Z"
+}

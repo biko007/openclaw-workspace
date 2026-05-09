@@ -1,0 +1,197 @@
+{
+  "timestamp": "2026-05-06T06:29:37.935Z",
+  "cities": [
+    {
+      "name": "Santiago, Santiago Metropolitan Region",
+      "count": 475
+    },
+    {
+      "name": "Berlin, Berlin",
+      "count": 264
+    },
+    {
+      "name": "São Paulo, São Paulo (state)",
+      "count": 178
+    },
+    {
+      "name": "Buenos Aires, Ciudad Autónoma de Buenos Aires",
+      "count": 175
+    },
+    {
+      "name": "Mexico City, Distrito Federal",
+      "count": 168
+    },
+    {
+      "name": "Tuttlingen, Baden-Württemberg",
+      "count": 163
+    },
+    {
+      "name": "New York, New York",
+      "count": 132
+    },
+    {
+      "name": "Hamburg, Hamburg",
+      "count": 112
+    },
+    {
+      "name": "Bogotá, Distrito Especial",
+      "count": 108
+    },
+    {
+      "name": "Munich, Bayern",
+      "count": 87
+    },
+    {
+      "name": "Los Angeles, California",
+      "count": 79
+    },
+    {
+      "name": "Lima, Lima Region",
+      "count": 76
+    },
+    {
+      "name": "Ushuaia, Tierra del Fuego",
+      "count": 64
+    },
+    {
+      "name": "Cologne, Nordrhein-Westfalen",
+      "count": 60
+    },
+    {
+      "name": "London, England",
+      "count": 58
+    },
+    {
+      "name": "Rio de Janeiro, Rio de Janeiro (state)",
+      "count": 58
+    },
+    {
+      "name": "Barcelona, Cataluña",
+      "count": 55
+    },
+    {
+      "name": "Melbourne, Victoria",
+      "count": 53
+    },
+    {
+      "name": "Sydney, New South Wales",
+      "count": 48
+    },
+    {
+      "name": "Wien, Vienna",
+      "count": 47
+    }
+  ],
+  "countries": [
+    {
+      "name": "DE",
+      "count": 3358
+    },
+    {
+      "name": "US",
+      "count": 2792
+    },
+    {
+      "name": "BR",
+      "count": 1257
+    },
+    {
+      "name": "AR",
+      "count": 951
+    },
+    {
+      "name": "CL",
+      "count": 945
+    },
+    {
+      "name": "MX",
+      "count": 896
+    },
+    {
+      "name": "GB",
+      "count": 654
+    },
+    {
+      "name": "IT",
+      "count": 379
+    },
+    {
+      "name": "CO",
+      "count": 338
+    },
+    {
+      "name": "ES",
+      "count": 322
+    },
+    {
+      "name": "CA",
+      "count": 295
+    },
+    {
+      "name": "FR",
+      "count": 266
+    },
+    {
+      "name": "AU",
+      "count": 257
+    },
+    {
+      "name": "PL",
+      "count": 217
+    },
+    {
+      "name": "AT",
+      "count": 152
+    },
+    {
+      "name": "CH",
+      "count": 131
+    },
+    {
+      "name": "PE",
+      "count": 126
+    },
+    {
+      "name": "NL",
+      "count": 126
+    },
+    {
+      "name": "TR",
+      "count": 117
+    },
+    {
+      "name": "TH",
+      "count": 108
+    }
+  ],
+  "age_gender": [
+    {
+      "name": "35-44",
+      "count": 6117
+    },
+    {
+      "name": "25-34",
+      "count": 5792
+    },
+    {
+      "name": "45-54",
+      "count": 2472
+    },
+    {
+      "name": "18-24",
+      "count": 947
+    },
+    {
+      "name": "55-64",
+      "count": 667
+    },
+    {
+      "name": "65+",
+      "count": 282
+    },
+    {
+      "name": "13-17",
+      "count": 18
+    }
+  ]
+}

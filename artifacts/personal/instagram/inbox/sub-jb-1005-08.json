@@ -1,0 +1,47 @@
+{
+  "id": "sub-jb-1005-08",
+  "media": [
+    {
+      "type": "image",
+      "path": "/home/biko/.openclaw/workspace/artifacts/personal/instagram/inbox/media/sub-jb-1005-08/sub-jb-1005-08.jpg",
+      "mimeType": "image/jpeg"
+    }
+  ],
+  "context": {
+    "user_note": "jb-0905-2"
+  },
+  "status": "analyzed",
+  "created": "2026-05-10T06:53:15.981Z",
+  "analysis": {
+    "subjects": [
+      "cheese platter",
+      "blue cheese",
+      "aged cheese",
+      "fruit preserve",
+      "honey"
+    ],
+    "mood": "sophisticated",
+    "setting": "restaurant or fine dining establishment",
+    "composition": "circular arrangement on white plate",
+    "colors": [
+      "white",
+      "cream",
+      "yellow",
+      "blue",
+      "brown",
+      "black",
+      "orange"
+    ],
+    "narrative_hooks": [
+      "artisanal cheese tasting",
+      "culinary exploration",
+      "gourmet experience",
+      "food pairing"
+    ],
+    "visual_quality": "medium",
+    "pillar_match": [
+      "culture",
+      "style"
+    ]
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "id": "sub-jb-1005-05",
+  "media": [
+    {
+      "type": "image",
+      "path": "/home/biko/.openclaw/workspace/artifacts/personal/instagram/inbox/media/sub-jb-1005-05/sub-jb-1005-05.jpg",
+      "mimeType": "image/jpeg"
+    }
+  ],
+  "context": {
+    "user_note": "jb-0905-2"
+  },
+  "status": "analyzed",
+  "created": "2026-05-10T06:53:03.699Z",
+  "analysis": {
+    "subjects": [
+      "gourmet dish",
+      "fine dining plate",
+      "artistic food presentation",
+      "culinary art",
+      "restaurant meal"
+    ],
+    "mood": "sophisticated",
+    "setting": "upscale restaurant",
+    "composition": "centered artistic plating",
+    "colors": [
+      "white",
+      "green",
+      "red",
+      "orange",
+      "yellow",
+      "cream"
+    ],
+    "narrative_hooks": [
+      "culinary artistry",
+      "fine dining experience",
+      "chef's creativity",
+      "gastronomic journey",
+      "luxury lifestyle"
+    ],
+    "visual_quality": "high",
+    "pillar_match": [
+      "culture",
+      "style"
+    ]
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "id": "sub-jb-1005-11",
+  "media": [
+    {
+      "type": "video",
+      "path": "/home/biko/.openclaw/workspace/artifacts/personal/instagram/inbox/media/sub-jb-1005-11/sub-jb-1005-11.mp4",
+      "mimeType": "video/mp4"
+    }
+  ],
+  "context": {
+    "user_note": "jb-0905-2"
+  },
+  "status": "analyzed",
+  "created": "2026-05-10T06:53:29.129Z",
+  "analysis": {
+    "subjects": [
+      "gourmet food",
+      "fine dining",
+      "artisanal plating",
+      "restaurant meal",
+      "culinary presentation"
+    ],
+    "mood": "sophisticated",
+    "setting": "upscale restaurant",
+    "composition": "centered plating with artistic sauce drizzles",
+    "colors": [
+      "white",
+      "green",
+      "purple",
+      "brown",
+      "beige",
+      "silver",
+      "black",
+      "red"
+    ],
+    "narrative_hooks": [
+      "culinary artistry",
+      "fine dining experience",
+      "gourmet lifestyle",
+      "food as art",
+      "restaurant culture",
+      "luxury lifestyle"
+    ],
+    "visual_quality": "high",
+    "pillar_match": [
+      "culture",
+      "style"
+    ],
+    "storyboard": [
+      {
+        "timestamp_s": 0,
+        "description": "gourmet food, fine dining, artisanal plating, restaurant meal, culinary presentation",
+        "mood": "sophisticated"
+      },
+      {
+        "timestamp_s": 2,
+        "description": "luxury watch, fine dining, gourmet food, plated dessert, wrist accessory",
+        "mood": "sophisticated"
+      },
+      {
+        "timestamp_s": 4,
+        "description": "fine dining, gourmet food, plated dish, artisanal presentation, culinary arts",
+        "mood": "sophisticated"
+      }
+    ]
+  }
+}

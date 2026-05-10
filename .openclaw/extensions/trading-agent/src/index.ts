@@ -580,7 +580,16 @@ const app = express();
 app.use(express.json());
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, connected: ibkr.isConnected() });
+  res.json({ ok: true, service: "trading-agent", connected: ibkr.isConnected(), uptime: process.uptime() });
+});
+
+app.get("/ready", (_req, res) => {
+  const connected = ibkr.isConnected();
+  res.json({ ok: connected, service: "trading-agent", connected });
+});
+
+app.get("/version", (_req, res) => {
+  res.json({ service: "trading-agent", node: process.version, uptime: process.uptime() });
 });
 
 app.get("/status", (_req, res) => {

@@ -1,0 +1,9 @@
+
+# Hygiene 2026-05-11 — Sprint 2 Aftermath
+# Runtime/sensitive data: tokens, health, tenant info, instagram drafts
+artifacts/personal/
+
+# Build artifacts (sollten nie ins Repo)
+**/dist/
+**/node_modules/
+**/.openclaw-cache/

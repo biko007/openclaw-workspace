@@ -1,0 +1,29 @@
+{
+  "_instructions": "Trage für jeden Freitext den passenden cost_categories.code ein. Apply läuft erst wenn alle Werte ≠ null sind.",
+  "_available_codes": [
+    "grundsteuer",
+    "wasser",
+    "entwaesserung",
+    "heizung",
+    "warmwasser",
+    "verbundene_heizung_warmwasser",
+    "aufzug",
+    "strassenreinigung_muell",
+    "gebaeudereinigung",
+    "gartenpflege",
+    "beleuchtung",
+    "schornstein",
+    "versicherung",
+    "hauswart",
+    "antenne_kabel",
+    "waeschepflege",
+    "sonstige_betrkv",
+    "instandhaltung",
+    "modernisierung",
+    "verwaltung",
+    "schuldzinsen",
+    "afa",
+    "leerstand"
+  ],
+  "mapping": {}
+}

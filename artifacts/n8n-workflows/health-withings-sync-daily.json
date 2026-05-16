@@ -1,0 +1,361 @@
+{
+    "updatedAt": "2026-05-16T12:19:01.194Z",
+    "createdAt": "2026-05-12T16:56:01.599Z",
+    "id": "uSGEPq973pNTxXtj",
+    "name": "health-withings-sync-daily",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "triggerAtHour": 7
+                        }
+                    ]
+                }
+            },
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.3,
+            "position": [
+                -576,
+                0
+            ],
+            "id": "cfe057cb-2cdd-4586-a76e-9bf8aed239d7",
+            "name": "Schedule Trigger"
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "https://app.bikobickel.de/api/health/withings-sync",
+                "authentication": "genericCredentialType",
+                "genericAuthType": "httpHeaderAuth",
+                "options": {
+                    "response": {
+                        "response": {
+                            "responseFormat": "json"
+                        }
+                    }
+                }
+            },
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.4,
+            "position": [
+                -432,
+                0
+            ],
+            "id": "fb613e92-35a1-4d60-af76-e5e76d454231",
+            "name": "HTTP Request",
+            "credentials": {
+                "httpHeaderAuth": {
+                    "id": "7WOfFozlun7dSP2y",
+                    "name": "OpenClaw Core Service Token"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict",
+                        "version": 3
+                    },
+                    "conditions": [
+                        {
+                            "id": "06e09db4-aa66-4128-b6a5-98a184f30118",
+                            "leftValue": "={{ $json.status }}",
+                            "rightValue": "ok",
+                            "operator": {
+                                "type": "string",
+                                "operation": "notEquals",
+                                "name": "filter.operator.notEquals"
+                            }
+                        }
+                    ],
+                    "combinator": "and"
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2.3,
+            "position": [
+                -288,
+                0
+            ],
+            "id": "ee471ace-8dbd-43ba-9971-b35c90ed162d",
+            "name": "Did it fail?"
+        },
+        {
+            "parameters": {
+                "chatId": "133260792",
+                "text": "=Withings-Sync Fehler: {{ $json.status }}",
+                "additionalFields": {
+                    "appendAttribution": false
+                }
+            },
+            "type": "n8n-nodes-base.telegram",
+            "typeVersion": 1.2,
+            "position": [
+                -80,
+                -96
+            ],
+            "id": "5cab6895-32f8-4d21-a37c-427009aa17bd",
+            "name": "Send a text message",
+            "webhookId": "7759cda6-8fe5-4c32-b436-05cb32d1f3c1",
+            "credentials": {
+                "telegramApi": {
+                    "id": "jy7wokJSuuWBdnLE",
+                    "name": "Telegram account"
+                }
+            }
+        }
+    ],
+    "connections": {
+        "Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "HTTP Request",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "HTTP Request": {
+            "main": [
+                [
+                    {
+                        "node": "Did it fail?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Did it fail?": {
+            "main": [
+                [
+                    {
+                        "node": "Send a text message",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1",
+        "binaryMode": "separate",
+        "timezone": "Europe/Berlin"
+    },
+    "staticData": {
+        "node:Schedule Trigger": {
+            "recurrenceRules": []
+        }
+    },
+    "meta": {
+        "templateCredsSetupCompleted": true
+    },
+    "pinData": {},
+    "versionId": "1d28b901-bace-4438-9c26-a1fb4955da5a",
+    "activeVersionId": "1d28b901-bace-4438-9c26-a1fb4955da5a",
+    "versionCounter": 50,
+    "triggerCount": 1,
+    "shared": [
+        {
+            "updatedAt": "2026-05-12T16:56:01.599Z",
+            "createdAt": "2026-05-12T16:56:01.599Z",
+            "role": "workflow:owner",
+            "workflowId": "uSGEPq973pNTxXtj",
+            "projectId": "sZZmefXygKb62bIw",
+            "project": {
+                "updatedAt": "2026-05-09T18:58:08.229Z",
+                "createdAt": "2026-05-09T08:25:22.600Z",
+                "id": "sZZmefXygKb62bIw",
+                "name": "J\u00fcrgen Bickel <jbickel2@yahoo.de>",
+                "type": "personal",
+                "icon": null,
+                "description": null,
+                "creatorId": "dd7f6eb2-039c-4a5a-b9a3-8cbb3a13cadd"
+            }
+        }
+    ],
+    "tags": [],
+    "activeVersion": {
+        "updatedAt": "2026-05-16T12:19:01.194Z",
+        "createdAt": "2026-05-16T12:19:01.194Z",
+        "versionId": "1d28b901-bace-4438-9c26-a1fb4955da5a",
+        "workflowId": "uSGEPq973pNTxXtj",
+        "nodes": [
+            {
+                "parameters": {
+                    "rule": {
+                        "interval": [
+                            {
+                                "triggerAtHour": 7
+                            }
+                        ]
+                    }
+                },
+                "type": "n8n-nodes-base.scheduleTrigger",
+                "typeVersion": 1.3,
+                "position": [
+                    -576,
+                    0
+                ],
+                "id": "cfe057cb-2cdd-4586-a76e-9bf8aed239d7",
+                "name": "Schedule Trigger"
+            },
+            {
+                "parameters": {
+                    "method": "POST",
+                    "url": "https://app.bikobickel.de/api/health/withings-sync",
+                    "authentication": "genericCredentialType",
+                    "genericAuthType": "httpHeaderAuth",
+                    "options": {
+                        "response": {
+                            "response": {
+                                "responseFormat": "json"
+                            }
+                        }
+                    }
+                },
+                "type": "n8n-nodes-base.httpRequest",
+                "typeVersion": 4.4,
+                "position": [
+                    -432,
+                    0
+                ],
+                "id": "fb613e92-35a1-4d60-af76-e5e76d454231",
+                "name": "HTTP Request",
+                "credentials": {
+                    "httpHeaderAuth": {
+                        "id": "7WOfFozlun7dSP2y",
+                        "name": "OpenClaw Core Service Token"
+                    }
+                }
+            },
+            {
+                "parameters": {
+                    "conditions": {
+                        "options": {
+                            "caseSensitive": true,
+                            "leftValue": "",
+                            "typeValidation": "strict",
+                            "version": 3
+                        },
+                        "conditions": [
+                            {
+                                "id": "06e09db4-aa66-4128-b6a5-98a184f30118",
+                                "leftValue": "={{ $json.status }}",
+                                "rightValue": "ok",
+                                "operator": {
+                                    "type": "string",
+                                    "operation": "notEquals",
+                                    "name": "filter.operator.notEquals"
+                                }
+                            }
+                        ],
+                        "combinator": "and"
+                    },
+                    "options": {}
+                },
+                "type": "n8n-nodes-base.if",
+                "typeVersion": 2.3,
+                "position": [
+                    -288,
+                    0
+                ],
+                "id": "ee471ace-8dbd-43ba-9971-b35c90ed162d",
+                "name": "Did it fail?"
+            },
+            {
+                "parameters": {
+                    "chatId": "133260792",
+                    "text": "=Withings-Sync Fehler: {{ $json.status }}",
+                    "additionalFields": {
+                        "appendAttribution": false
+                    }
+                },
+                "type": "n8n-nodes-base.telegram",
+                "typeVersion": 1.2,
+                "position": [
+                    -80,
+                    -96
+                ],
+                "id": "5cab6895-32f8-4d21-a37c-427009aa17bd",
+                "name": "Send a text message",
+                "webhookId": "7759cda6-8fe5-4c32-b436-05cb32d1f3c1",
+                "credentials": {
+                    "telegramApi": {
+                        "id": "jy7wokJSuuWBdnLE",
+                        "name": "Telegram account"
+                    }
+                }
+            }
+        ],
+        "connections": {
+            "Schedule Trigger": {
+                "main": [
+                    [
+                        {
+                            "node": "HTTP Request",
+                            "type": "main",
+                            "index": 0
+                        }
+                    ]
+                ]
+            },
+            "HTTP Request": {
+                "main": [
+                    [
+                        {
+                            "node": "Did it fail?",
+                            "type": "main",
+                            "index": 0
+                        }
+                    ]
+                ]
+            },
+            "Did it fail?": {
+                "main": [
+                    [
+                        {
+                            "node": "Send a text message",
+                            "type": "main",
+                            "index": 0
+                        }
+                    ]
+                ]
+            }
+        },
+        "authors": "J\u00fcrgen Bickel",
+        "name": null,
+        "description": null,
+        "autosaved": false,
+        "workflowPublishHistory": [
+            {
+                "createdAt": "2026-05-16T12:19:01.209Z",
+                "id": 9,
+                "workflowId": "uSGEPq973pNTxXtj",
+                "versionId": "1d28b901-bace-4438-9c26-a1fb4955da5a",
+                "event": "deactivated",
+                "userId": "dd7f6eb2-039c-4a5a-b9a3-8cbb3a13cadd"
+            },
+            {
+                "createdAt": "2026-05-16T12:19:01.220Z",
+                "id": 10,
+                "workflowId": "uSGEPq973pNTxXtj",
+                "versionId": "1d28b901-bace-4438-9c26-a1fb4955da5a",
+                "event": "activated",
+                "userId": "dd7f6eb2-039c-4a5a-b9a3-8cbb3a13cadd"
+            }
+        ]
+    }
+}

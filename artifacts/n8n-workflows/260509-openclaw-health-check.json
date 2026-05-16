@@ -1,0 +1,100 @@
+{
+    "updatedAt": "2026-05-16T12:17:46.792Z",
+    "createdAt": "2026-05-09T20:38:14.909Z",
+    "id": "fDZjfFFSOrLphExL",
+    "name": "260509-openclaw-health-check",
+    "description": null,
+    "active": false,
+    "isArchived": true,
+    "nodes": [
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "triggerAtHour": 8,
+                            "triggerAtMinute": 5
+                        }
+                    ]
+                }
+            },
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.3,
+            "position": [
+                0,
+                0
+            ],
+            "id": "27245139-0067-40c6-b32b-4a66a6b64f67",
+            "name": "Schedule Trigger"
+        },
+        {
+            "parameters": {
+                "url": "https://app.bikobickel.de/api/status",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "Authorization",
+                            "value": "Bearer <5e83fedcc4c41b811a719633a2cd5f0e006b362fcaa69d55d491991cfa54c7a0>"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.4,
+            "position": [
+                208,
+                0
+            ],
+            "id": "e92445f8-2305-4155-a352-b6303c26d03b",
+            "name": "HTTP Request"
+        }
+    ],
+    "connections": {
+        "Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "HTTP Request",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1",
+        "binaryMode": "separate",
+        "timezone": "Europe/Berlin"
+    },
+    "staticData": null,
+    "meta": null,
+    "pinData": {},
+    "versionId": "5eb2bf94-2bd9-425d-8049-1ad3881e7f7b",
+    "activeVersionId": null,
+    "versionCounter": 18,
+    "triggerCount": 0,
+    "shared": [
+        {
+            "updatedAt": "2026-05-09T20:38:14.909Z",
+            "createdAt": "2026-05-09T20:38:14.909Z",
+            "role": "workflow:owner",
+            "workflowId": "fDZjfFFSOrLphExL",
+            "projectId": "sZZmefXygKb62bIw",
+            "project": {
+                "updatedAt": "2026-05-09T18:58:08.229Z",
+                "createdAt": "2026-05-09T08:25:22.600Z",
+                "id": "sZZmefXygKb62bIw",
+                "name": "J\u00fcrgen Bickel <jbickel2@yahoo.de>",
+                "type": "personal",
+                "icon": null,
+                "description": null,
+                "creatorId": "dd7f6eb2-039c-4a5a-b9a3-8cbb3a13cadd"
+            }
+        }
+    ],
+    "tags": [],
+    "activeVersion": null
+}

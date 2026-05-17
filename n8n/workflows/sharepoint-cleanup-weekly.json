@@ -1,0 +1,72 @@
+{
+  "name": "sharepoint-cleanup-weekly",
+  "description": "Weekly dry-run of SP cleanup-missing endpoint (Sunday 03:00 Berlin). NOT auto-imported — user decides when to activate.",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 3 * * 0"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [-576, 0],
+      "id": "a1b2c3d4-0001-4000-8000-000000000001",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:18789/api/sharepoint/cleanup-missing?dry_run=true",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [-432, 0],
+      "id": "a1b2c3d4-0002-4000-8000-000000000002",
+      "name": "Cleanup Dry Run",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "7WOfFozlun7dSP2y",
+          "name": "OpenClaw Core Service Token"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Cleanup Dry Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Berlin"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "triggerCount": 1
+}

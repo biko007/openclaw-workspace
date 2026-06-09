@@ -8,3 +8,4 @@ artifacts/.archive/
 **/dist/
 **/node_modules/
 **/.openclaw-cache/
+Scans/

@@ -86,3 +86,9 @@ bikosopenclaw                          (umbrella — no code at this level)
 `bikosoc` and `HDCC` are **area names**. Technical artifacts keep their existing
 names (`openclaw-gateway`, `openclaw_core`, `executive-agent`, ...). Do NOT
 rename anything.
+
+## Session Start
+
+At session start, read your area's governance before doing anything:
+`<area-repo>/codex/CODEX_README.md` and the files it lists. The area is fixed
+for the whole session (see Session Binding).

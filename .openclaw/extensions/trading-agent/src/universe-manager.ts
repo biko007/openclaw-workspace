@@ -129,6 +129,9 @@ export class UniverseManager {
       if (s.currency === "EUR") {
         // XETRA stocks: append .DE
         ticker = `${s.symbol}.DE`;
+      } else if (ticker === "BRK.B") {
+        // Yahoo Finance uses hyphen instead of dot for share classes
+        ticker = "BRK-B";
       }
       tickerMap.set(ticker, s.symbol);
     }
@@ -159,7 +162,7 @@ export class UniverseManager {
           quotes.set(origSymbol, { changePct, volume, price, volumeRatio });
         }
       } catch (e) {
-        console.log(`[universe] Yahoo quote batch error (chunk ${i}):`, e instanceof Error ? e.message : e);
+        console.log(`[universe] Yahoo quote batch error (chunk ${i}, tickers: ${chunk.join(",")}):`, e instanceof Error ? e.message : e);
       }
       // Small delay between chunks
       if (i + CHUNK < tickers.length) {

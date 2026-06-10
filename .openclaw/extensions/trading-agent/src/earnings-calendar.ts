@@ -27,7 +27,12 @@ export async function refreshEarningsCache(): Promise<EarningsCache> {
   // Build yahoo tickers
   const tickerMap = new Map<string, string>(); // yahoo ticker → original symbol
   for (const s of universe.symbols) {
-    const ticker = s.currency === "EUR" ? `${s.symbol}.DE` : s.symbol;
+    let ticker = s.symbol;
+    if (s.currency === "EUR") {
+      ticker = `${s.symbol}.DE`;
+    } else if (ticker === "BRK.B") {
+      ticker = "BRK-B";
+    }
     tickerMap.set(ticker, s.symbol);
   }
 
@@ -61,7 +66,7 @@ export async function refreshEarningsCache(): Promise<EarningsCache> {
         }
       }
     } catch (e) {
-      console.log(`[earnings] Quote batch error (chunk ${i}):`, e instanceof Error ? e.message : e);
+      console.log(`[earnings] Quote batch error (chunk ${i}, tickers: ${chunk.join(",")}):`, e instanceof Error ? e.message : e);
     }
 
     // Rate limit between chunks

@@ -7,6 +7,7 @@ import {
   ErrorCode,
   OrderAction,
   OrderType,
+  TimeInForce,
   type TickType,
   type ContractDetails,
   type ScannerSubscription,
@@ -293,9 +294,11 @@ export class IBKRConnection extends EventEmitter {
 
       this.api.on(EventName.accountSummary, onSummary);
       this.api.on(EventName.accountSummaryEnd, onEnd);
+      // Group must be "All" — account IDs are not valid group names and cause
+      // "Unified group name is invalid" errors (~2k/day)
       this.api.reqAccountSummary(
         reqId,
-        this.account || "All",
+        "All",
         "NetLiquidation,TotalCashValue,UnrealizedPnL,RealizedPnL",
       );
     });
@@ -526,12 +529,14 @@ export class IBKRConnection extends EventEmitter {
     const ocaGroup = `OCA_${params.symbol}_${Date.now()}`;
     const stopId = this.getNextOrderId();
 
+    // GTC: exit orders must survive past the placement day (IBKR defaults to DAY)
     const stopOrder: Order = {
       orderId: stopId,
       action: OrderAction.SELL,
       orderType: OrderType.STP,
       totalQuantity: params.quantity,
       auxPrice: params.stopPrice,
+      tif: TimeInForce.GTC,
       ocaGroup,
       transmit: params.takeProfitPrice ? false : true,
     };
@@ -548,6 +553,7 @@ export class IBKRConnection extends EventEmitter {
         orderType: OrderType.LMT,
         totalQuantity: params.quantity,
         lmtPrice: params.takeProfitPrice,
+        tif: TimeInForce.GTC,
         ocaGroup,
         transmit: true, // transmit both exit orders
       };

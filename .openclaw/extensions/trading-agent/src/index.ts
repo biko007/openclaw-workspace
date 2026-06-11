@@ -746,10 +746,11 @@ app.post("/close/:symbol", async (req, res) => {
   }
 
   try {
+    // Use position's exchange/currency — hardcode SMART/USD prevented closing XETRA positions
     const result = await ibkr.placeMarketSell({
       symbol,
-      exchange: "SMART",
-      currency: "USD",
+      exchange: pos.exchange || "SMART",
+      currency: pos.currency || "USD",
       quantity: pos.quantity,
     });
 

@@ -14,6 +14,7 @@ import {
   type Order,
   type OrderState,
 } from "@stoqey/ib";
+import { OrderIdSequencer } from "./order-state-tracker.js";
 
 export interface Position {
   symbol: string;
@@ -79,7 +80,7 @@ export class IBKRConnection extends EventEmitter {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private _reconnectAttempt = 0;
   private nextReqId = 1000;
-  private _nextOrderId = 0;
+  private _sequencer = new OrderIdSequencer();
   private account = "";
 
   constructor() {
@@ -150,7 +151,7 @@ export class IBKRConnection extends EventEmitter {
       });
 
       this.api.on(EventName.nextValidId, (orderId: number) => {
-        this._nextOrderId = orderId;
+        this._sequencer.setNextValidId(orderId);
       });
 
       this.api.connect();
@@ -465,8 +466,12 @@ export class IBKRConnection extends EventEmitter {
     };
   }
 
+  get sequencer(): OrderIdSequencer {
+    return this._sequencer;
+  }
+
   private getNextOrderId(): number {
-    return this._nextOrderId++;
+    return this._sequencer.next();
   }
 
   /**
@@ -619,6 +624,7 @@ export class IBKRConnection extends EventEmitter {
         _remaining: number,
         avgFillPrice: number,
       ) => {
+        this._trackOrderId(id);
         if (id !== orderId) return;
         if (status === "Filled") {
           clearTimeout(timeout);
@@ -648,6 +654,10 @@ export class IBKRConnection extends EventEmitter {
       this.api!.on(EventName.error, onError);
       this.api!.placeOrder(orderId, contract, order);
     });
+  }
+
+  private _trackOrderId(id: number): void {
+    this._sequencer.trackSeenId(id);
   }
 
   private setState(state: ConnectionState): void {

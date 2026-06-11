@@ -680,6 +680,57 @@ describe("getExitState", () => {
     expect(exitState).not.toBeNull();
     expect(exitState!.stopOrder).toBeUndefined();
   });
+
+  it("31b. gen-1 replacement derives qty from stop/tp submitted quantity", () => {
+    const log = new DurableEventLog(logPath());
+    const tracker = new OrderStateTracker(log);
+    tracker.rebuild();
+
+    const conId = 265598;
+
+    // Gen 0: entry filled with 10, stop submitted with 10, then cancelled
+    const entryRef0 = buildOrderRef({ account: "DUP514636", tradeIntentId: "AAPL-260611-01", conId, leg: "entry", gen: 0 });
+    const stopRef0 = buildOrderRef({ account: "DUP514636", tradeIntentId: "AAPL-260611-01", conId, leg: "stop", gen: 0 });
+    tracker.applyEvent(makeSubmitted({ orderRef: entryRef0, conId }));
+    tracker.applyEvent(makeFilled({ orderRef: entryRef0, cumQty: 10 }));
+    tracker.applyEvent(makeSubmitted({ orderRef: stopRef0, conId, action: "SELL", orderType: "STP", quantity: 10 }));
+    tracker.applyEvent(makeCancelled({ orderRef: stopRef0 }));
+
+    // Gen 1: replacement stop + tp, no new entry — qty must come from these legs
+    const stopRef1 = buildOrderRef({ account: "DUP514636", tradeIntentId: "AAPL-260611-01", conId, leg: "stop", gen: 1 });
+    const tpRef1 = buildOrderRef({ account: "DUP514636", tradeIntentId: "AAPL-260611-01", conId, leg: "tp", gen: 1 });
+    tracker.applyEvent(makeSubmitted({ orderRef: stopRef1, conId, action: "SELL", orderType: "STP", quantity: 10 }));
+    tracker.applyEvent(makeStatusChanged({ orderRef: stopRef1, status: "PreSubmitted", filled: 0, remaining: 10, avgFillPrice: 0 }));
+    tracker.applyEvent(makeSubmitted({ orderRef: tpRef1, conId, action: "SELL", orderType: "LMT", quantity: 10 }));
+    tracker.applyEvent(makeStatusChanged({ orderRef: tpRef1, status: "PreSubmitted", filled: 0, remaining: 10, avgFillPrice: 0 }));
+
+    const exitState = tracker.getExitState(conId);
+    expect(exitState).not.toBeNull();
+    expect(exitState!.gen).toBe(1);
+    expect(exitState!.qty).toBe(10);
+    expect(exitState!.stopOrder).toBeDefined();
+    expect(exitState!.tpOrder).toBeDefined();
+  });
+
+  it("31c. differing stop/tp submitted qty yields qty=-1 mismatch marker", () => {
+    const log = new DurableEventLog(logPath());
+    const tracker = new OrderStateTracker(log);
+    tracker.rebuild();
+
+    const conId = 265598;
+
+    // Submit stop with qty=10, tp with qty=5 — intentional mismatch scenario
+    const stopRef = buildOrderRef({ account: "DUP514636", tradeIntentId: "AAPL-260611-01", conId, leg: "stop", gen: 0 });
+    const tpRef = buildOrderRef({ account: "DUP514636", tradeIntentId: "AAPL-260611-01", conId, leg: "tp", gen: 0 });
+    tracker.applyEvent(makeSubmitted({ orderRef: stopRef, conId, action: "SELL", orderType: "STP", quantity: 10 }));
+    tracker.applyEvent(makeStatusChanged({ orderRef: stopRef, status: "PreSubmitted", filled: 0, remaining: 10, avgFillPrice: 0 }));
+    tracker.applyEvent(makeSubmitted({ orderRef: tpRef, conId, action: "SELL", orderType: "LMT", quantity: 5 }));
+    tracker.applyEvent(makeStatusChanged({ orderRef: tpRef, status: "PreSubmitted", filled: 0, remaining: 5, avgFillPrice: 0 }));
+
+    const exitState = tracker.getExitState(conId);
+    expect(exitState).not.toBeNull();
+    expect(exitState!.qty).toBe(-1);
+  });
 });
 
 // ─── Group 7: getOpenIntents (3 Tests) ──────────────────────────────────────

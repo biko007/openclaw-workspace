@@ -294,7 +294,10 @@ export class DurableEventLog {
         // Best-effort quarantine write
       }
 
-      // Rewrite file without the corrupt last line
+      // Rewrite file without the corrupt last line.
+      // No fsync here: this runs only at startup before any new events are appended,
+      // so a crash during rewrite just means the corrupt line survives and will be
+      // quarantined again on the next startup. Deliberately accepted trade-off.
       const goodLines = lines.slice(0, -1);
       try {
         writeFileSync(this.filePath, goodLines.map((l) => l + "\n").join(""), "utf8");
@@ -352,6 +355,8 @@ export class OrderStateTracker {
   private latestStatusByRef = new Map<string, string>();
   // For tracking cumQty per orderRef from fills
   private fillCumQtyByRef = new Map<string, number>();
+  // For tracking submitted quantity per orderRef (from order_submitted events)
+  private submittedQtyByRef = new Map<string, number>();
 
   constructor(log: DurableEventLog) {
     this.log = log;
@@ -371,6 +376,7 @@ export class OrderStateTracker {
     this._openIntents.clear();
     this.latestStatusByRef.clear();
     this.fillCumQtyByRef.clear();
+    this.submittedQtyByRef.clear();
     this._tradingLocked = false;
 
     const { events, corrupted, quarantinedLine } = this.log.loadEvents();
@@ -438,7 +444,11 @@ export class OrderStateTracker {
 
     let stopOrder: { orderRef: string; status: string } | undefined;
     let tpOrder: { orderRef: string; status: string } | undefined;
-    let qty = 0;
+    // Derive qty from order_submitted.quantity of the stop/tp legs of maxGen,
+    // not from entry cumQty — because at gen>0 (replacements) there is no
+    // new entry order, only replacement exit legs with their own submitted qty.
+    let stopQty: number | undefined;
+    let tpQty: number | undefined;
 
     for (const ref of refs) {
       const parsed = parseOrderRef(ref);
@@ -449,12 +459,21 @@ export class OrderStateTracker {
 
       if (parsed.leg === "stop" && !isFinal) {
         stopOrder = { orderRef: ref, status };
+        stopQty = this.submittedQtyByRef.get(ref);
       } else if (parsed.leg === "tp" && !isFinal) {
         tpOrder = { orderRef: ref, status };
-      } else if (parsed.leg === "entry") {
-        // qty from cumQty of last fill
-        qty = this.fillCumQtyByRef.get(ref) ?? 0;
+        tpQty = this.submittedQtyByRef.get(ref);
       }
+    }
+
+    // If both stop and tp exist with differing quantities, signal mismatch.
+    // qty = -1 means the Guardian (Etappe 4) must treat this as qty_mismatch
+    // and re-place both legs with consistent quantity.
+    let qty: number;
+    if (stopQty !== undefined && tpQty !== undefined && stopQty !== tpQty) {
+      qty = -1;
+    } else {
+      qty = stopQty ?? tpQty ?? 0;
     }
 
     return { stopOrder, tpOrder, qty, gen: maxGen };
@@ -537,6 +556,7 @@ export class OrderStateTracker {
         const e = event as OrderSubmittedEvent;
         // Set initial status
         this.latestStatusByRef.set(e.orderRef, "Submitted");
+        this.submittedQtyByRef.set(e.orderRef, e.quantity);
         break;
       }
 

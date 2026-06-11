@@ -6,7 +6,8 @@ import { promisify } from "node:util";
 const execAsync = promisify(execCb);
 import express from "express";
 import YahooFinance from "yahoo-finance2";
-import { IBKRConnection, type Position } from "./ibkr.js";
+import { IBKRConnection, type Position, type ExitFillInfo } from "./ibkr.js";
+import { DurableEventLog, OrderStateTracker } from "./order-state-tracker.js";
 import { UniverseManager } from "./universe-manager.js";
 import { OrderExecutor } from "./executor.js";
 import {
@@ -89,6 +90,14 @@ async function sendTelegramNotification(text: string): Promise<void> {
 // ── Setup ──
 
 const ibkr = new IBKRConnection();
+
+const EVENT_LOG_PATH = join(
+  process.env.HOME || "/home/biko",
+  ".openclaw/workspace/artifacts/personal/trading/orders-v2.jsonl",
+);
+const eventLog = new DurableEventLog(EVENT_LOG_PATH);
+const tracker = new OrderStateTracker(eventLog);
+
 const universeManager = new UniverseManager(ibkr);
 const executor = new OrderExecutor(ibkr, () => currentStatus, sendTelegramNotification);
 let currentStatus: TradingStatus = loadStatus();
@@ -879,6 +888,53 @@ async function start(): Promise<void> {
   ibkr.on("reconnectFailed", (attempt: number) => {
     console.log(`[trading-agent] IBKR reconnect failed (attempt ${attempt})`);
   });
+
+  // Exit-fill Telegram notification
+  ibkr.on("exitFill", async (info: ExitFillInfo) => {
+    const legLabel = info.leg === "stop" ? "Stop-Loss" : "Take-Profit";
+    let pnlLine = "";
+    if (info.entryPrice && info.entryPrice > 0) {
+      const pnl = (info.fillPrice - info.entryPrice) * info.quantity;
+      const pnlPct = ((info.fillPrice - info.entryPrice) / info.entryPrice) * 100;
+      const sign = pnl >= 0 ? "+" : "";
+      pnlLine = `\nP&L (est.): ${sign}$${pnl.toFixed(2)} (${sign}${pnlPct.toFixed(1)}%)`;
+    }
+    const msg = [
+      `*Exit-Fill*`,
+      `*${info.symbol}* — ${legLabel}`,
+      `Fill: $${info.fillPrice.toFixed(2)} | Qty: ${info.quantity}`,
+      pnlLine,
+    ].filter(Boolean).join("\n");
+    await sendTelegramNotification(msg);
+  });
+
+  // Rebuild tracker from durable log
+  const rebuildResult = tracker.rebuild();
+  if (rebuildResult.tradingLocked) {
+    console.error("[trading-agent] CRITICAL: Trading locked — corrupted event log");
+    await sendTelegramNotification("CRITICAL: Trading locked — corrupted event log. Manual intervention required.");
+  }
+  if (rebuildResult.openIntents.length > 0) {
+    console.warn(`[trading-agent] WARN: ${rebuildResult.openIntents.length} open intents found at startup`);
+  }
+  if (rebuildResult.quarantinedLine) {
+    console.warn("[trading-agent] WARN: Quarantined corrupt last line from event log");
+  }
+
+  // Wire tracker to IBKR connection
+  ibkr.setTracker(tracker);
+
+  // Arm sequencer with highest known orderId from log
+  const allOrderIds: number[] = [];
+  const logResult = eventLog.loadEvents();
+  for (const ev of logResult.events) {
+    if (ev.orderId && ev.orderId > 0) {
+      allOrderIds.push(ev.orderId);
+    }
+  }
+  if (allOrderIds.length > 0) {
+    ibkr.sequencer.arm(Math.max(...allOrderIds));
+  }
 
   try {
     await ibkr.connect();

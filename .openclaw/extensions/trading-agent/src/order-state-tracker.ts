@@ -33,6 +33,7 @@ export type OrderEventType =
   | "order_status_changed"
   | "order_filled"
   | "order_cancelled"
+  | "order_error"
   | "replacement_intent_started"
   | "replacement_intent_confirmed"
   | "replacement_intent_abandoned"
@@ -98,6 +99,12 @@ export interface OrderCancelledEvent extends OrderEventBase {
   reason?: string;
 }
 
+export interface OrderErrorEvent extends OrderEventBase {
+  type: "order_error";
+  errorCode: number;
+  errorMessage: string;
+}
+
 export interface IntentEvent extends OrderEventBase {
   type:
     | "replacement_intent_started"
@@ -116,6 +123,7 @@ export type OrderEvent =
   | OrderStatusChangedEvent
   | OrderFilledEvent
   | OrderCancelledEvent
+  | OrderErrorEvent
   | IntentEvent;
 
 export interface ExitState {
@@ -351,6 +359,10 @@ export class OrderStateTracker {
   private orderRefsByConId = new Map<number, Set<string>>();
   private _openIntents = new Map<string, IntentEvent>();
 
+  // For tracking errors per orderRef
+  private errorsByRef = new Map<string, OrderErrorEvent[]>();
+  private errorDedupeSet = new Set<string>();
+
   // For tracking latest status per orderRef
   private latestStatusByRef = new Map<string, string>();
   // For tracking cumQty per orderRef from fills
@@ -374,6 +386,8 @@ export class OrderStateTracker {
     this.eventsByOrderRef.clear();
     this.orderRefsByConId.clear();
     this._openIntents.clear();
+    this.errorsByRef.clear();
+    this.errorDedupeSet.clear();
     this.latestStatusByRef.clear();
     this.fillCumQtyByRef.clear();
     this.submittedQtyByRef.clear();
@@ -503,6 +517,21 @@ export class OrderStateTracker {
     return this.eventsByOrderRef.get(orderRef) ?? [];
   }
 
+  /**
+   * Check if any errors have been recorded for an orderRef.
+   */
+  hasError(orderRef: string): boolean {
+    const errors = this.errorsByRef.get(orderRef);
+    return !!errors && errors.length > 0;
+  }
+
+  /**
+   * Get the latest known status for an orderRef (read-only access to latestStatusByRef).
+   */
+  getLatestStatus(orderRef: string): string | undefined {
+    return this.latestStatusByRef.get(orderRef);
+  }
+
   get tradingLocked(): boolean {
     return this._tradingLocked;
   }
@@ -522,6 +551,12 @@ export class OrderStateTracker {
     if (event.type === "order_filled") {
       const e = event as OrderFilledEvent;
       return this.seenExecIds.has(e.execId);
+    }
+
+    if (event.type === "order_error") {
+      const e = event as OrderErrorEvent;
+      const key = `${e.orderRef}|${e.errorCode}|${e.errorMessage}`;
+      return this.errorDedupeSet.has(key);
     }
 
     return false;
@@ -588,6 +623,19 @@ export class OrderStateTracker {
       case "order_cancelled": {
         const e = event as OrderCancelledEvent;
         this.latestStatusByRef.set(e.orderRef, "Cancelled");
+        break;
+      }
+
+      case "order_error": {
+        const e = event as OrderErrorEvent;
+        const key = `${e.orderRef}|${e.errorCode}|${e.errorMessage}`;
+        this.errorDedupeSet.add(key);
+        let errors = this.errorsByRef.get(e.orderRef);
+        if (!errors) {
+          errors = [];
+          this.errorsByRef.set(e.orderRef, errors);
+        }
+        errors.push(e);
         break;
       }
 

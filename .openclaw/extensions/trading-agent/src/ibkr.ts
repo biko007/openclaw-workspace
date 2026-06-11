@@ -14,7 +14,13 @@ import {
   type Order,
   type OrderState,
 } from "@stoqey/ib";
-import { OrderIdSequencer } from "./order-state-tracker.js";
+import {
+  OrderIdSequencer,
+  OrderStateTracker,
+  isOwnOrderRef,
+  parseOrderRef,
+  type OrderEvent,
+} from "./order-state-tracker.js";
 
 export interface Position {
   symbol: string;
@@ -67,6 +73,15 @@ export interface MarketQuote {
   timestamp: string;
 }
 
+export interface ExitFillInfo {
+  orderRef: string;
+  symbol: string;
+  leg: "stop" | "tp";
+  fillPrice: number;
+  quantity: number;
+  entryPrice?: number;
+}
+
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
 const BACKOFF_STEPS = [5_000, 10_000, 30_000, 60_000, 120_000];
@@ -82,12 +97,179 @@ export class IBKRConnection extends EventEmitter {
   private nextReqId = 1000;
   private _sequencer = new OrderIdSequencer();
   private account = "";
+  private _tracker: OrderStateTracker | null = null;
+  private _orderIdToRef = new Map<number, string>();
 
   constructor() {
     super();
     this.host = process.env.IBKR_HOST || "127.0.0.1";
     this.port = Number(process.env.IBKR_PAPER_PORT) || 7497;
     this.clientId = Number(process.env.IBKR_CLIENT_ID) || 1;
+  }
+
+  /**
+   * Set the tracker instance. Called from index.ts after rebuild().
+   */
+  setTracker(tracker: OrderStateTracker): void {
+    this._tracker = tracker;
+  }
+
+  /**
+   * Register an orderId→orderRef mapping. Called from executor (E5).
+   */
+  registerOrderRef(orderId: number, orderRef: string): void {
+    this._orderIdToRef.set(orderId, orderRef);
+  }
+
+  // ── Stable bound handlers — re-registered on each new IBApi instance in connect() ──
+
+  private _handleOrderStatus = (
+    orderId: number,
+    status: string,
+    filled: number,
+    remaining: number,
+    avgFillPrice: number,
+    permId?: number,
+    parentId?: number,
+    lastFillPrice?: number,
+  ): void => {
+    this._sequencer.trackSeenId(orderId);
+    // Re-emit on IBKRConnection level
+    this.emit("orderStatus", orderId, status, filled, remaining, avgFillPrice, permId, lastFillPrice);
+    // Tracker integration: only if orderRef known
+    const orderRef = this._orderIdToRef.get(orderId);
+    if (orderRef && this._tracker) {
+      this._tracker.applyEvent({
+        type: "order_status_changed",
+        timestamp: new Date().toISOString(),
+        orderRef,
+        orderId,
+        permId: permId ?? undefined,
+        status,
+        filled,
+        remaining,
+        avgFillPrice,
+        lastFillPrice,
+      });
+      // Exit-fill detection
+      if (status === "Filled") {
+        this._checkExitFill(orderRef, avgFillPrice);
+      }
+    }
+  };
+
+  private _handleOpenOrder = (
+    orderId: number,
+    contract: Contract,
+    order: Order,
+    orderState: OrderState,
+  ): void => {
+    this._sequencer.trackSeenId(orderId);
+    // Populate orderIdToRef from order.orderRef (for all own orders)
+    if (order.orderRef && isOwnOrderRef(order.orderRef)) {
+      this._orderIdToRef.set(orderId, order.orderRef);
+    }
+    this.emit("openOrder", orderId, contract, order, orderState);
+  };
+
+  private _handleExecDetails = (
+    reqId: number,
+    contract: Contract,
+    execution: { orderId?: number; orderRef?: string; execId?: string; side?: string; shares?: number; price?: number; cumQty?: number; avgPrice?: number },
+  ): void => {
+    if (execution.orderId) {
+      this._sequencer.trackSeenId(execution.orderId);
+    }
+    // Populate orderIdToRef from execution.orderRef
+    if (execution.orderId && execution.orderRef && isOwnOrderRef(execution.orderRef)) {
+      this._orderIdToRef.set(execution.orderId, execution.orderRef);
+    }
+    // Tracker integration: create order_filled event
+    const orderRef = execution.orderId ? this._orderIdToRef.get(execution.orderId) : undefined;
+    if (orderRef && this._tracker && execution.execId) {
+      const execId = execution.execId;
+      const lastDot = execId.lastIndexOf(".");
+      const execBase = lastDot > 0 ? execId.substring(0, lastDot) : execId;
+      this._tracker.applyEvent({
+        type: "order_filled",
+        timestamp: new Date().toISOString(),
+        orderRef,
+        orderId: execution.orderId,
+        execId,
+        execIdBase: execBase,
+        side: execution.side ?? "",
+        shares: execution.shares ?? 0,
+        price: execution.price ?? 0,
+        cumQty: execution.cumQty ?? 0,
+        avgPrice: execution.avgPrice ?? 0,
+      });
+    }
+    this.emit("execDetails", reqId, contract, execution);
+  };
+
+  private _handleOrderError = (
+    err: Error,
+    code: number,
+    id: number,
+  ): void => {
+    // Only handle order-related errors (id > 0). Connection errors (code=-1)
+    // are handled by the existing connection error handler.
+    if (id > 0) {
+      this._sequencer.trackSeenId(id);
+      const orderRef = this._orderIdToRef.get(id);
+      if (orderRef && this._tracker) {
+        this._tracker.applyEvent({
+          type: "order_error",
+          timestamp: new Date().toISOString(),
+          orderRef,
+          orderId: id,
+          errorCode: code,
+          errorMessage: err.message,
+        });
+      }
+      this.emit("orderError", id, code, err.message);
+    }
+  };
+
+  /**
+   * Check if a filled order is an exit (stop/tp) and emit exitFill.
+   * Inactive until E5 — live orders carry orderRef tags only from E5 onwards.
+   * This path fires only when placeBracketOrder/executor use the new orderRef schemas.
+   */
+  private _checkExitFill(orderRef: string, fillPrice: number): void {
+    const parsed = parseOrderRef(orderRef);
+    if (!parsed || (parsed.leg !== "stop" && parsed.leg !== "tp")) return;
+
+    // Try to extract symbol and quantity from tracker's order_submitted event
+    let symbol = "";
+    let quantity = 0;
+    let entryPrice: number | undefined;
+    if (this._tracker) {
+      const events = this._tracker.getEventsForOrder(orderRef);
+      for (const ev of events) {
+        if (ev.type === "order_submitted") {
+          symbol = (ev as any).symbol ?? "";
+          quantity = (ev as any).quantity ?? 0;
+        }
+      }
+      // Look for entry price from the entry leg of the same tradeIntentId
+      const entryRef = orderRef.replace(`|${parsed.leg}|`, "|entry|");
+      const entryEvents = this._tracker.getEventsForOrder(entryRef);
+      for (const ev of entryEvents) {
+        if (ev.type === "order_filled") {
+          entryPrice = (ev as any).avgPrice;
+        }
+      }
+    }
+
+    this.emit("exitFill", {
+      orderRef,
+      symbol,
+      leg: parsed.leg,
+      fillPrice,
+      quantity,
+      entryPrice,
+    } satisfies ExitFillInfo);
   }
 
   get state(): ConnectionState {
@@ -112,6 +294,13 @@ export class IBKRConnection extends EventEmitter {
 
     try {
       this.api = new IBApi({ host: this.host, port: this.port, clientId: this.clientId });
+
+      // Permanent listeners — re-registered on each new IBApi instance.
+      // Old IBApi is GC'd, so no listener accumulation.
+      this.api.on(EventName.orderStatus, this._handleOrderStatus);
+      this.api.on(EventName.openOrder, this._handleOpenOrder);
+      this.api.on(EventName.execDetails, this._handleExecDetails);
+      this.api.on(EventName.error, this._handleOrderError);
 
       this.api.on(EventName.connected, () => {
         const wasReconnect = this._reconnectAttempt > 0;
@@ -604,6 +793,7 @@ export class IBKRConnection extends EventEmitter {
 
   /**
    * Place an order and wait for fill confirmation from IBKR.
+   * Listens on IBKRConnection (stable), not this.api (transient).
    */
   private placeAndWaitForFill(
     orderId: number,
@@ -624,7 +814,6 @@ export class IBKRConnection extends EventEmitter {
         _remaining: number,
         avgFillPrice: number,
       ) => {
-        this._trackOrderId(id);
         if (id !== orderId) return;
         if (status === "Filled") {
           clearTimeout(timeout);
@@ -637,27 +826,24 @@ export class IBKRConnection extends EventEmitter {
         }
       };
 
-      const onError = (err: Error, code: ErrorCode, id: number) => {
+      const onError = (id: number, code: number, message: string) => {
         if (id !== orderId) return;
         clearTimeout(timeout);
         cleanup();
-        console.error(`[ibkr] Order ${id} error (${code}): ${err.message}`);
+        console.error(`[ibkr] Order ${id} error (${code}): ${message}`);
         resolve({ filled: false, avgFillPrice: 0 });
       };
 
       const cleanup = () => {
-        (this.api as any)?.removeListener(EventName.orderStatus, onStatus);
-        (this.api as any)?.removeListener(EventName.error, onError);
+        this.removeListener("orderStatus", onStatus);
+        this.removeListener("orderError", onError);
       };
 
-      this.api!.on(EventName.orderStatus, onStatus);
-      this.api!.on(EventName.error, onError);
+      // Listen on IBKRConnection (stable), not this.api (transient)
+      this.on("orderStatus", onStatus);
+      this.on("orderError", onError);
       this.api!.placeOrder(orderId, contract, order);
     });
-  }
-
-  private _trackOrderId(id: number): void {
-    this._sequencer.trackSeenId(id);
   }
 
   private setState(state: ConnectionState): void {

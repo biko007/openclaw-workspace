@@ -18,6 +18,7 @@ import {
   type OrderStatusChangedEvent,
   type OrderFilledEvent,
   type OrderCancelledEvent,
+  type OrderErrorEvent,
   type IntentEvent,
   type OrderEvent,
 } from "../src/order-state-tracker.js";
@@ -836,5 +837,107 @@ describe("OrderIdSequencer", () => {
     seq.setNextValidId(50); // lower than current
     seq.trackSeenId(200);
     expect(seq.next()).toBe(201);
+  });
+});
+
+// ─── Group 9: order_error (3 Tests) ──────────────────────────────────────────
+
+describe("order_error", () => {
+  it("40. order_error event is persisted and projected, hasError() returns true", () => {
+    const log = new DurableEventLog(logPath());
+    const tracker = new OrderStateTracker(log);
+    tracker.rebuild();
+
+    const ref = buildOrderRef({
+      account: "DUP514636",
+      tradeIntentId: "AAPL-260611-01",
+      conId: 265598,
+      leg: "entry",
+      gen: 0,
+    });
+
+    tracker.applyEvent(makeSubmitted({ orderRef: ref }));
+
+    const errorEvent: OrderErrorEvent = {
+      type: "order_error",
+      timestamp: new Date().toISOString(),
+      orderRef: ref,
+      orderId: 42,
+      errorCode: 201,
+      errorMessage: "Order rejected",
+    };
+    const applied = tracker.applyEvent(errorEvent);
+    expect(applied).toBe(true);
+    expect(tracker.hasError(ref)).toBe(true);
+
+    // Verify persisted
+    const result = log.loadEvents();
+    expect(result.events).toHaveLength(2);
+    expect(result.events[1].type).toBe("order_error");
+  });
+
+  it("41. duplicate order_error (same orderRef+code+message) is deduplicated", () => {
+    const log = new DurableEventLog(logPath());
+    const tracker = new OrderStateTracker(log);
+    tracker.rebuild();
+
+    const ref = buildOrderRef({
+      account: "DUP514636",
+      tradeIntentId: "AAPL-260611-01",
+      conId: 265598,
+      leg: "entry",
+      gen: 0,
+    });
+
+    tracker.applyEvent(makeSubmitted({ orderRef: ref }));
+
+    const errorEvent: OrderErrorEvent = {
+      type: "order_error",
+      timestamp: new Date().toISOString(),
+      orderRef: ref,
+      orderId: 42,
+      errorCode: 201,
+      errorMessage: "Order rejected",
+    };
+    expect(tracker.applyEvent(errorEvent)).toBe(true);
+    expect(tracker.applyEvent(errorEvent)).toBe(false);
+  });
+
+  it("42. getLatestStatus() returns correct status after status_changed", () => {
+    const log = new DurableEventLog(logPath());
+    const tracker = new OrderStateTracker(log);
+    tracker.rebuild();
+
+    const ref = buildOrderRef({
+      account: "DUP514636",
+      tradeIntentId: "AAPL-260611-01",
+      conId: 265598,
+      leg: "entry",
+      gen: 0,
+    });
+
+    tracker.applyEvent(makeSubmitted({ orderRef: ref }));
+    expect(tracker.getLatestStatus(ref)).toBe("Submitted");
+
+    tracker.applyEvent(makeStatusChanged({
+      orderRef: ref,
+      status: "PreSubmitted",
+      filled: 0,
+      remaining: 10,
+      avgFillPrice: 0,
+    }));
+    expect(tracker.getLatestStatus(ref)).toBe("PreSubmitted");
+
+    tracker.applyEvent(makeStatusChanged({
+      orderRef: ref,
+      status: "Filled",
+      filled: 10,
+      remaining: 0,
+      avgFillPrice: 149.50,
+    }));
+    expect(tracker.getLatestStatus(ref)).toBe("Filled");
+
+    // Unknown ref returns undefined
+    expect(tracker.getLatestStatus("nonexistent")).toBeUndefined();
   });
 });

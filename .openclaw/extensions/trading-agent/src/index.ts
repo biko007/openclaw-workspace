@@ -6,8 +6,9 @@ import { promisify } from "node:util";
 const execAsync = promisify(execCb);
 import express from "express";
 import YahooFinance from "yahoo-finance2";
-import { IBKRConnection, type Position, type ExitFillInfo } from "./ibkr.js";
+import { IBKRConnection, type Position, type ExitFillInfo, type SyncSnapshot } from "./ibkr.js";
 import { DurableEventLog, OrderStateTracker } from "./order-state-tracker.js";
+import { classifyPositions } from "./position-classifier.js";
 import { UniverseManager } from "./universe-manager.js";
 import { OrderExecutor } from "./executor.js";
 import {
@@ -106,6 +107,7 @@ let previousPositionSymbols = new Map<string, Position>(); // track for close de
 let lastReportDay = -1; // track daily report
 let lastHealthCheckDay = -1; // track daily health check
 let lastEarningsRefreshDay = -1; // track daily earnings cache refresh
+const loggedLegacyOrders = new Set<number>(); // E3b: dedupe legacy-own logs
 
 // ── Watchdog state ──
 const WATCHDOG_INTERVAL = 5 * 60 * 1000; // 5 minutes
@@ -867,6 +869,32 @@ app.post("/earnings/refresh", (_req, res) => {
   );
 });
 
+// ── Classification (E3b) ──
+
+function runClassification(snapshot: SyncSnapshot): void {
+  const classification = classifyPositions(snapshot, tracker, ibkr.getAccount());
+
+  // One-time legacy-own log (deduped by orderId)
+  for (const lo of classification.legacyOwn) {
+    if (!loggedLegacyOrders.has(lo.orderId)) {
+      console.log(
+        `[reconcile] Legacy-own order: ${lo.symbol}#${lo.orderId} ` +
+        `(clientId=${lo.clientId}, ${lo.orderType} qty=${lo.totalQuantity})`,
+      );
+      loggedLegacyOrders.add(lo.orderId);
+    }
+  }
+
+  // Reconcile log per spec: one line per run
+  console.log(
+    `[reconcile] positions=${classification.positions.length} ` +
+    `protected=${classification.stateCount["protected"] ?? 0} ` +
+    `states=${JSON.stringify(classification.stateCount)} ` +
+    `orphans=[${classification.orphans.map((o) => o.orderRef).join(",")}] ` +
+    `foreign=[${classification.foreignCount}]`,
+  );
+}
+
 // ── Startup ──
 
 async function start(): Promise<void> {
@@ -878,13 +906,14 @@ async function start(): Promise<void> {
     console.log(`[trading-agent] IBKR state: ${state}`);
   });
 
-  // Wire reconnect events — sync barrier with 60s cooldown (E3a)
+  // Wire reconnect events — sync barrier with 60s cooldown (E3a) + classification (E3b)
   ibkr.on("reconnected", async () => {
     console.log("[trading-agent] IBKR reconnected — running sync barrier");
     consecutiveWatchdogFailures = 0;
     try {
       const snapshot = await ibkr.runSyncBarrier({ isReconnect: true });
       console.log(`[trading-agent] Reconnect sync: ${snapshot.ownOrders.length} own, ${snapshot.foreignOrders.length} foreign`);
+      runClassification(snapshot);
     } catch (e) {
       console.warn("[trading-agent] Sync barrier failed on reconnect:", e instanceof Error ? e.message : e);
     }
@@ -960,7 +989,7 @@ async function start(): Promise<void> {
     console.log("[trading-agent] IBKR not available, running in disconnected mode");
   }
 
-  // Initial sync barrier (E3a) — collect orders, positions, executions
+  // Initial sync barrier (E3a) + classification (E3b)
   if (ibkr.isConnected()) {
     try {
       const snapshot = await ibkr.runSyncBarrier({ isReconnect: false });
@@ -968,11 +997,7 @@ async function start(): Promise<void> {
         `[trading-agent] Sync barrier: ${snapshot.ownOrders.length} own, ` +
         `${snapshot.foreignOrders.length} foreign, ${snapshot.positions.length} positions`,
       );
-      if (snapshot.foreignOrders.length > 0) {
-        console.warn(
-          `[trading-agent] Foreign orders: ${snapshot.foreignOrders.map((o) => `${o.symbol}#${o.orderId}`).join(", ")}`,
-        );
-      }
+      runClassification(snapshot);
     } catch (e) {
       console.warn("[trading-agent] Sync barrier failed at startup:", e instanceof Error ? e.message : e);
     }
@@ -1005,16 +1030,14 @@ async function start(): Promise<void> {
   }, WATCHDOG_INTERVAL);
   console.log("[watchdog] Started (interval: 5min)");
 
-  // Periodic sync barrier — 5 min cycle, independent of pollIBKR (E3a)
+  // Periodic sync barrier — 5 min cycle, independent of pollIBKR (E3a + E3b)
   // Collects orders + positions only (no exec backfill on periodic runs)
   const SYNC_BARRIER_INTERVAL = 5 * 60_000;
   setInterval(async () => {
     if (!ibkr.isConnected() || ibkr.syncInProgress) return;
     try {
       const snapshot = await ibkr.runSyncBarrier({ isReconnect: false });
-      console.log(
-        `[sync] Periodic: ${snapshot.ownOrders.length} own, ${snapshot.foreignOrders.length} foreign, ${snapshot.positions.length} pos`,
-      );
+      runClassification(snapshot);
     } catch (e) {
       console.warn("[sync] Periodic sync error:", e instanceof Error ? e.message : e);
     }

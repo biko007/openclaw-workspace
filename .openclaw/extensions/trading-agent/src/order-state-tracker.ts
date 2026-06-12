@@ -494,6 +494,31 @@ export class OrderStateTracker {
   }
 
   /**
+   * Scan all known orderRefs, parse tradeIntentId, filter by symbol+date,
+   * return the highest seq number. Default: 0.
+   */
+  getMaxTradeIntentSeq(symbol: string, date: Date): number {
+    const yy = String(date.getFullYear()).slice(2);
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const dd = String(date.getDate()).padStart(2, "0");
+    const prefix = `${symbol}-${yy}${mm}${dd}-`;
+    let maxSeq = 0;
+    for (const refs of this.orderRefsByConId.values()) {
+      for (const ref of refs) {
+        const parsed = parseOrderRef(ref);
+        if (!parsed) continue;
+        const tid = parsed.tradeIntentId;
+        if (tid.startsWith(prefix)) {
+          const seqStr = tid.slice(prefix.length);
+          const seq = Number(seqStr);
+          if (Number.isInteger(seq) && seq > maxSeq) maxSeq = seq;
+        }
+      }
+    }
+    return maxSeq;
+  }
+
+  /**
    * Get all open intents (started but not confirmed/abandoned).
    */
   getOpenIntents(): OpenIntent[] {

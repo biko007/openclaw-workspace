@@ -42,12 +42,10 @@ import {
   loadUniverse,
   loadUniverseConfig,
   saveUniverseConfig,
-  appendOrder,
   loadRecentScanResults,
   loadRecentDecisions,
   loadEarningsCache,
   type TradingStatus,
-  type OrderRecord,
 } from "./store.js";
 
 const PORT = 18793;
@@ -107,7 +105,7 @@ const eventLog = new DurableEventLog(EVENT_LOG_PATH);
 const tracker = new OrderStateTracker(eventLog);
 
 const universeManager = new UniverseManager(ibkr);
-const executor = new OrderExecutor(ibkr, () => currentStatus, sendTelegramNotification);
+const executor = new OrderExecutor(ibkr, () => currentStatus, sendTelegramNotification, tracker);
 let currentStatus: TradingStatus = loadStatus();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let previousPositionSymbols = new Map<string, Position>(); // track for close detection
@@ -313,24 +311,52 @@ async function pollIBKR(): Promise<void> {
 // ── Position Close Notification ──
 
 async function notifyPositionClosed(symbol: string, lastKnown: Position): Promise<void> {
-  // Find entry order for this symbol
-  const orders = loadOrders();
-  const entryOrder = orders
-    .filter((o) => o.symbol === symbol && o.side === "BUY" && o.status === "Filled")
-    .pop(); // most recent BUY fill
-
-  const entryPrice = entryOrder?.fillPrice || entryOrder?.price || lastKnown.avgCost;
-  const entryTime = entryOrder?.fillTimestamp || entryOrder?.timestamp;
-
-  // Determine close reason from exit orders
-  const exitOrders = orders.filter(
-    (o) => o.symbol === symbol && o.side === "SELL" && (o.status === "Filled" || o.status === "Stopped" || o.status === "TargetHit"),
-  );
-  const lastExit = exitOrders.pop();
-
+  // Dual-source: try tracker first (E5 entries), fall back to legacy orders.jsonl
+  let entryPrice = lastKnown.avgCost;
+  let entryTime: string | undefined;
   let closeReason = "Manuell";
-  if (lastExit?.orderType === "STP") closeReason = "Stop-Loss";
-  else if (lastExit?.orderType === "LMT" && lastExit.parentOrderId) closeReason = "Take-Profit";
+
+  // Tracker source: scan for entry-leg order_submitted events matching this symbol
+  let trackerFound = false;
+  if (lastSyncSnapshot) {
+    const pos = lastSyncSnapshot.positions.find((p) => p.symbol === symbol);
+    if (pos) {
+      const refs = tracker.getOrderRefsForConId(pos.conId);
+      for (const ref of refs) {
+        const submitted = tracker.getSubmittedEvent(ref);
+        if (submitted && submitted.action === "BUY") {
+          entryPrice = submitted.limitPrice ?? lastKnown.avgCost;
+          entryTime = submitted.timestamp;
+          // Check for fill price
+          const fillEvents = tracker.getEventsForOrder(ref);
+          for (const ev of fillEvents) {
+            if (ev.type === "order_filled") {
+              entryPrice = (ev as any).avgPrice ?? entryPrice;
+            }
+          }
+          trackerFound = true;
+          break;
+        }
+      }
+    }
+  }
+
+  // Legacy fallback for pre-E5 entries
+  if (!trackerFound) {
+    const orders = loadOrders();
+    const entryOrder = orders
+      .filter((o) => o.symbol === symbol && o.side === "BUY" && o.status === "Filled")
+      .pop();
+    entryPrice = entryOrder?.fillPrice || entryOrder?.price || lastKnown.avgCost;
+    entryTime = entryOrder?.fillTimestamp || entryOrder?.timestamp;
+
+    const exitOrders = orders.filter(
+      (o) => o.symbol === symbol && o.side === "SELL" && (o.status === "Filled" || o.status === "Stopped" || o.status === "TargetHit"),
+    );
+    const lastExit = exitOrders.pop();
+    if (lastExit?.orderType === "STP") closeReason = "Stop-Loss";
+    else if (lastExit?.orderType === "LMT" && lastExit.parentOrderId) closeReason = "Take-Profit";
+  }
 
   // P&L calculation
   const pnl = lastKnown.unrealizedPnl || (lastKnown.marketPrice - lastKnown.avgCost) * lastKnown.quantity;
@@ -785,7 +811,10 @@ app.get("/universe/scan/status", (_req, res) => {
   res.json({ ...lastScanResult, status: scanRunning ? "running" : lastScanResult.status });
 });
 
+// Deprecated: orders.jsonl is legacy read-only from E5.
+// New order events go to orders-v2.jsonl via OrderStateTracker.
 app.get("/orders", (_req, res) => {
+  res.setHeader("X-Deprecated", "Use tracker events");
   const limit = Number((_req.query as any).limit) || 20;
   const orders = loadOrders();
   res.json(orders.slice(-limit));
@@ -815,20 +844,9 @@ app.post("/close/:symbol", async (req, res) => {
       quantity: pos.quantity,
     });
 
-    // Log the order
-    const orderId = `close_${symbol}_${Date.now()}`;
-    appendOrder({
-      id: orderId,
-      symbol,
-      side: "SELL",
-      quantity: pos.quantity,
-      price: result.fillPrice || 0,
-      status: "Filled",
-      timestamp: new Date().toISOString(),
-      fillPrice: result.fillPrice,
-      fillTimestamp: new Date().toISOString(),
-      orderType: "MKT",
-    });
+    // Note: placeMarketSell generates orderStatus events picked up by
+    // permanent listeners. For untagged manual closes, the position
+    // sentinel (pollIBKR close detection) handles notification.
 
     // Calculate P&L
     const fillPrice = result.fillPrice || 0;

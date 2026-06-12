@@ -19,6 +19,8 @@ import {
   OrderStateTracker,
   isOwnOrderRef,
   parseOrderRef,
+  buildOrderRef,
+  buildOcaGroup,
   type OrderEvent,
 } from "./order-state-tracker.js";
 
@@ -1053,8 +1055,70 @@ export class IBKRConnection extends EventEmitter {
   }
 
   /**
-   * Place BUY order, wait for fill, then place Stop-Loss + Take-Profit.
-   * Sequential execution ensures stops are only active after entry fills.
+   * Resolve conId for a stock symbol via reqContractDetails.
+   * Uses internal reqId counter (not the order sequencer). Timeout 10s.
+   */
+  async resolveContractId(
+    symbol: string,
+    exchange: string,
+    currency: string,
+  ): Promise<number> {
+    if (!this.api || !this.isConnected()) {
+      throw new Error("IBKR not connected");
+    }
+    const reqId = this.nextReqId++;
+    const contract: Contract = {
+      symbol,
+      secType: SecType.STK,
+      exchange: exchange || "SMART",
+      currency: currency || "USD",
+    };
+
+    return new Promise<number>((resolve, reject) => {
+      let done = false;
+      const timeout = setTimeout(() => {
+        if (done) return;
+        done = true;
+        cleanup();
+        reject(new Error(`resolveContractId timeout for ${symbol}`));
+      }, 10_000);
+
+      const onDetails = (_id: number, details: ContractDetails) => {
+        if (_id !== reqId || done) return;
+        done = true;
+        clearTimeout(timeout);
+        cleanup();
+        const conId = details.contract.conId;
+        if (conId == null) {
+          reject(new Error(`resolveContractId: no conId for ${symbol}`));
+        } else {
+          resolve(conId);
+        }
+      };
+
+      const onError = (_err: Error, code: number, id: number) => {
+        if (id !== reqId || done) return;
+        done = true;
+        clearTimeout(timeout);
+        cleanup();
+        reject(new Error(`resolveContractId error for ${symbol}: code=${code} ${_err.message}`));
+      };
+
+      const cleanup = () => {
+        (this.api as any)?.removeListener("contractDetails", onDetails);
+        (this.api as any)?.removeListener("error", onError);
+      };
+
+      (this.api as any).on("contractDetails", onDetails);
+      (this.api as any).on("error", onError);
+      this.api!.reqContractDetails(reqId, contract);
+    });
+  }
+
+  /**
+   * E5: Place BUY entry with fill-monitoring + automatic exit placement.
+   * Handles partial fills (exit qty = cumQty from execDetails), timeout,
+   * and gen-increment for subsequent partial fills.
    */
   async placeBracketOrder(params: {
     symbol: string;
@@ -1063,121 +1127,343 @@ export class IBKRConnection extends EventEmitter {
     quantity: number;
     limitPrice: number;
     stopPrice: number;
-    takeProfitPrice?: number;
-  }): Promise<{ entry: OrderResult; stopLoss?: OrderResult; takeProfit?: OrderResult }> {
+    takeProfitPrice: number;
+    tradeIntentId: string;
+    conId: number;
+  }): Promise<{
+    entry: OrderResult;
+    stopLoss?: OrderResult;
+    takeProfit?: OrderResult;
+    actualFilledQty: number;
+    exitGen: number;
+  }> {
     if (!this.api || !this.isConnected()) {
       throw new Error("IBKR not connected");
     }
 
+    const account = this.account;
+    const {
+      symbol, exchange, currency, quantity, limitPrice,
+      stopPrice, takeProfitPrice, tradeIntentId, conId,
+    } = params;
+
     const contract: Contract = {
-      symbol: params.symbol,
+      symbol,
       secType: SecType.STK,
-      exchange: params.exchange || "SMART",
-      currency: params.currency || "USD",
+      exchange: exchange || "SMART",
+      currency: currency || "USD",
+      conId,
     };
 
-    // Step 1: Place BUY LIMIT order and wait for fill
+    // ── Entry Phase ──
     const entryId = this.getNextOrderId();
+    const entryRef = buildOrderRef({
+      account, tradeIntentId, conId, leg: "entry", gen: 0,
+    });
+
+    // Log order_submitted for entry BEFORE placement
+    if (this._tracker) {
+      this._tracker.applyEvent({
+        type: "order_submitted",
+        timestamp: new Date().toISOString(),
+        orderRef: entryRef,
+        orderId: entryId,
+        symbol,
+        conId,
+        action: "BUY",
+        orderType: "LMT",
+        quantity,
+        limitPrice,
+        tif: "DAY",
+        exchange,
+        currency,
+      });
+    }
+
+    this.registerOrderRef(entryId, entryRef);
+
     const entryOrder: Order = {
       orderId: entryId,
       action: OrderAction.BUY,
       orderType: OrderType.LMT,
-      totalQuantity: params.quantity,
-      lmtPrice: params.limitPrice,
+      totalQuantity: quantity,
+      lmtPrice: limitPrice,
       transmit: true,
+      orderRef: entryRef,
     };
 
-    console.log(`[ibkr] Step 1/2: BUY ${params.quantity} ${params.symbol} LMT@${params.limitPrice}`);
-    const fillResult = await this.placeAndWaitForFill(entryId, contract, entryOrder, 30_000);
+    console.log(
+      `[ibkr] E5: BUY ${quantity} ${symbol} LMT@${limitPrice} (ref=${entryRef})`,
+    );
+    this.api!.placeOrder(entryId, contract, entryOrder);
 
-    if (!fillResult.filled) {
-      console.log(`[ibkr] BUY ${params.symbol} not filled in 30s — cancelling`);
-      try { this.api!.cancelOrder(entryId); } catch { /* ignore */ }
-      return {
-        entry: {
-          orderId: entryId,
-          symbol: params.symbol,
-          action: "BUY",
-          quantity: params.quantity,
-          orderType: "LMT",
-          limitPrice: params.limitPrice,
-          status: "Cancelled",
-        },
+    // ── Fill Monitoring (Promise-based) ──
+    return new Promise((resolve) => {
+      let lastExitCumQty = 0;
+      let exitGen = -1;
+      let currentStopId = 0;
+      let currentTpId = 0;
+      let exitOpsRunning = false;
+      let pendingQty = 0;
+      let entryDone = false;
+      let entryFillPrice = 0;
+      let stopResult: OrderResult | undefined;
+      let tpResult: OrderResult | undefined;
+
+      const tryResolve = () => {
+        if (entryDone && !exitOpsRunning) {
+          cleanup();
+          resolve({
+            entry: {
+              orderId: entryId,
+              symbol,
+              action: "BUY",
+              quantity,
+              orderType: "LMT",
+              limitPrice,
+              fillPrice: entryFillPrice || undefined,
+              status: lastExitCumQty > 0 ? "Filled" : "Cancelled",
+            },
+            stopLoss: stopResult,
+            takeProfit: tpResult,
+            actualFilledQty: lastExitCumQty,
+            exitGen: Math.max(exitGen, 0),
+          });
+        }
       };
-    }
 
-    console.log(`[ibkr] BUY ${params.symbol} filled @ ${fillResult.avgFillPrice}`);
+      /** Place STP+TP pair for a given generation. Synchronous (no await). */
+      const placeExits = (cumQty: number, gen: number): void => {
+        const sId = this.getNextOrderId();
+        const tId = this.getNextOrderId();
+        const stopRef = buildOrderRef({
+          account, tradeIntentId, conId, leg: "stop", gen,
+        });
+        const tpRef = buildOrderRef({
+          account, tradeIntentId, conId, leg: "tp", gen,
+        });
+        const ocaGroup = buildOcaGroup(tradeIntentId, gen);
 
-    // Step 2: Place Stop-Loss + Take-Profit (OCA group — one cancels the other)
-    const ocaGroup = `OCA_${params.symbol}_${Date.now()}`;
-    const stopId = this.getNextOrderId();
+        if (this._tracker) {
+          this._tracker.applyEvent({
+            type: "order_submitted",
+            timestamp: new Date().toISOString(),
+            orderRef: stopRef,
+            orderId: sId,
+            symbol,
+            conId,
+            action: "SELL",
+            orderType: "STP",
+            quantity: cumQty,
+            auxPrice: stopPrice,
+            tif: "GTC",
+            ocaGroup,
+            exchange,
+            currency,
+          });
+          this._tracker.applyEvent({
+            type: "order_submitted",
+            timestamp: new Date().toISOString(),
+            orderRef: tpRef,
+            orderId: tId,
+            symbol,
+            conId,
+            action: "SELL",
+            orderType: "LMT",
+            quantity: cumQty,
+            limitPrice: takeProfitPrice,
+            tif: "GTC",
+            ocaGroup,
+            exchange,
+            currency,
+          });
+        }
 
-    // GTC: exit orders must survive past the placement day (IBKR defaults to DAY)
-    const stopOrder: Order = {
-      orderId: stopId,
-      action: OrderAction.SELL,
-      orderType: OrderType.STP,
-      totalQuantity: params.quantity,
-      auxPrice: params.stopPrice,
-      tif: TimeInForce.GTC,
-      ocaGroup,
-      transmit: params.takeProfitPrice ? false : true,
-    };
+        this.registerOrderRef(sId, stopRef);
+        this.registerOrderRef(tId, tpRef);
 
-    this.api!.placeOrder(stopId, contract, stopOrder);
+        const sOrder: Order = {
+          orderId: sId,
+          action: OrderAction.SELL,
+          orderType: OrderType.STP,
+          totalQuantity: cumQty,
+          auxPrice: stopPrice,
+          tif: TimeInForce.GTC,
+          ocaGroup,
+          ocaType: 2,
+          transmit: true,
+          outsideRth: false,
+          orderRef: stopRef,
+        };
 
-    let tpResult: OrderResult | undefined;
+        const tOrder: Order = {
+          orderId: tId,
+          action: OrderAction.SELL,
+          orderType: OrderType.LMT,
+          totalQuantity: cumQty,
+          lmtPrice: takeProfitPrice,
+          tif: TimeInForce.GTC,
+          ocaGroup,
+          ocaType: 2,
+          transmit: true,
+          outsideRth: false,
+          orderRef: tpRef,
+        };
 
-    if (params.takeProfitPrice) {
-      const tpId = this.getNextOrderId();
-      const tpOrder: Order = {
-        orderId: tpId,
-        action: OrderAction.SELL,
-        orderType: OrderType.LMT,
-        totalQuantity: params.quantity,
-        lmtPrice: params.takeProfitPrice,
-        tif: TimeInForce.GTC,
-        ocaGroup,
-        transmit: true, // transmit both exit orders
+        this.api!.placeOrder(sId, contract, sOrder);
+        this.api!.placeOrder(tId, contract, tOrder);
+
+        console.log(
+          `[ibkr] E5: Exits gen=${gen} qty=${cumQty} ` +
+          `STP@${stopPrice} TP@${takeProfitPrice} (OCA: ${ocaGroup})`,
+        );
+
+        stopResult = {
+          orderId: sId, symbol, action: "SELL", quantity: cumQty,
+          orderType: "STP", stopPrice, status: "Submitted",
+        };
+        tpResult = {
+          orderId: tId, symbol, action: "SELL", quantity: cumQty,
+          orderType: "LMT", limitPrice: takeProfitPrice, status: "Submitted",
+        };
+        currentStopId = sId;
+        currentTpId = tId;
       };
-      this.api!.placeOrder(tpId, contract, tpOrder);
 
-      tpResult = {
-        orderId: tpId,
-        symbol: params.symbol,
-        action: "SELL",
-        quantity: params.quantity,
-        orderType: "LMT",
-        limitPrice: params.takeProfitPrice,
-        status: "Submitted",
+      /** Cancel+Replace exits for partial-fill adjustment (I4 two-phase). */
+      const replaceExits = async (cumQty: number): Promise<void> => {
+        exitOpsRunning = true;
+        const newGen = exitGen + 1;
+        const oldStopId = currentStopId;
+        const oldTpId = currentTpId;
+
+        const intentRef = buildOrderRef({
+          account, tradeIntentId, conId, leg: "stop", gen: exitGen,
+        });
+        if (this._tracker) {
+          this._tracker.applyEvent({
+            type: "replacement_intent_started",
+            timestamp: new Date().toISOString(),
+            orderRef: intentRef,
+            targetOrderRef: intentRef,
+            reason: `partial_fill_adjust cumQty=${cumQty}`,
+            newGen: newGen,
+          });
+        }
+
+        // Phase 1: Place new exits gen+1
+        placeExits(cumQty, newGen);
+
+        // Wait for ack on new orders before cancelling old ones
+        await this.waitForOrderAck(currentStopId, 10_000);
+        await this.waitForOrderAck(currentTpId, 10_000);
+
+        // Phase 2: Cancel old gen
+        await this.cancelGuardianOrder(oldStopId, 10_000);
+        await this.cancelGuardianOrder(oldTpId, 10_000);
+
+        exitGen = newGen;
+
+        if (this._tracker) {
+          this._tracker.applyEvent({
+            type: "replacement_intent_confirmed",
+            timestamp: new Date().toISOString(),
+            orderRef: intentRef,
+            targetOrderRef: intentRef,
+            reason: `gen ${exitGen} active`,
+            newGen: exitGen,
+          });
+        }
+
+        exitOpsRunning = false;
+
+        // Process pending fills that arrived during the replacement
+        if (pendingQty > lastExitCumQty) {
+          const pq = pendingQty;
+          pendingQty = 0;
+          lastExitCumQty = pq;
+          await replaceExits(pq);
+        }
+
+        tryResolve();
       };
-      console.log(`[ibkr] Step 2/2: STP@${params.stopPrice} + TP@${params.takeProfitPrice} (OCA: ${ocaGroup})`);
-    } else {
-      console.log(`[ibkr] Step 2/2: STP@${params.stopPrice}`);
-    }
 
-    return {
-      entry: {
-        orderId: entryId,
-        symbol: params.symbol,
-        action: "BUY",
-        quantity: params.quantity,
-        orderType: "LMT",
-        limitPrice: params.limitPrice,
-        fillPrice: fillResult.avgFillPrice,
-        status: "Filled",
-      },
-      stopLoss: {
-        orderId: stopId,
-        symbol: params.symbol,
-        action: "SELL",
-        quantity: params.quantity,
-        orderType: "STP",
-        stopPrice: params.stopPrice,
-        status: "Submitted",
-      },
-      takeProfit: tpResult,
-    };
+      // ── Listeners on IBKRConnection (stable, not raw api) ──
+
+      const onExecDetails = (
+        _reqId: number,
+        _c: unknown,
+        execution: { orderId?: number; cumQty?: number; avgPrice?: number },
+      ) => {
+        if (execution.orderId !== entryId) return;
+        const cumQty = execution.cumQty ?? 0;
+        if (cumQty <= lastExitCumQty) return;
+
+        entryFillPrice = execution.avgPrice ?? entryFillPrice;
+
+        if (exitGen < 0) {
+          // First fill — place exits synchronously
+          lastExitCumQty = cumQty;
+          exitGen = 0;
+          placeExits(cumQty, 0);
+          tryResolve();
+        } else {
+          // Further fill — adjust exits (async)
+          if (exitOpsRunning) {
+            pendingQty = cumQty;
+            return;
+          }
+          lastExitCumQty = cumQty;
+          replaceExits(cumQty).catch((err) => {
+            console.error("[ibkr] E5: replaceExits error:", err);
+            exitOpsRunning = false;
+            tryResolve();
+          });
+        }
+      };
+
+      const onOrderStatus = (
+        id: number,
+        status: string,
+        filled: number,
+        _remaining: number,
+        avgFillPrice: number,
+      ) => {
+        if (id !== entryId) return;
+        if (status === "Filled") {
+          entryFillPrice = avgFillPrice || entryFillPrice;
+          entryDone = true;
+          // Safety: if execDetails didn't arrive first, place exits now
+          if (exitGen < 0 && filled > 0) {
+            lastExitCumQty = filled;
+            exitGen = 0;
+            placeExits(filled, 0);
+          }
+          tryResolve();
+        } else if (status === "Cancelled" || status === "Inactive") {
+          entryDone = true;
+          tryResolve();
+        }
+      };
+
+      const entryTimeout = setTimeout(() => {
+        if (!entryDone) {
+          console.log(`[ibkr] E5: Timeout — cancelling entry ${entryId}`);
+          try { this.api?.cancelOrder(entryId); } catch { /* ignore */ }
+          entryDone = true;
+          tryResolve();
+        }
+      }, 30_000);
+
+      const cleanup = () => {
+        clearTimeout(entryTimeout);
+        this.removeListener("execDetails", onExecDetails);
+        this.removeListener("orderStatus", onOrderStatus);
+      };
+
+      this.on("execDetails", onExecDetails);
+      this.on("orderStatus", onOrderStatus);
+    });
   }
 
   // ── Guardian Methods (E4) ──

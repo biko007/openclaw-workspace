@@ -168,7 +168,11 @@ export function saveStrategies(config: StrategyConfig): void {
   writeJson(STRATEGIES_PATH, config);
 }
 
-// ── Orders ──
+// ── Orders (LEGACY — read-only Archiv ab E5) ──
+// orders.jsonl wird nicht mehr beschrieben. Neue Order-Events gehen
+// ausschliesslich in orders-v2.jsonl via OrderStateTracker.
+// Lese-Zugriff bleibt fuer historische Daten (notifyPositionClosed,
+// sendDailyReport, ai-decision).
 
 const ORDERS_PATH = join(BASE, "orders.jsonl");
 

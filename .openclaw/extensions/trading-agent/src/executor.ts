@@ -3,11 +3,13 @@ import { IBKRConnection, type OrderResult } from "./ibkr.js";
 import {
   loadStrategies,
   loadUniverse,
-  appendOrder,
-  type OrderRecord,
   type ScanResult,
   type TradingStatus,
 } from "./store.js";
+import {
+  buildTradeIntentId,
+  type OrderStateTracker,
+} from "./order-state-tracker.js";
 import { evaluateTrade, shouldExecuteTrade, type TradeDecision } from "./ai-decision.js";
 import { hasEarningsSoon, getEarningsInfo } from "./earnings-calendar.js";
 
@@ -19,6 +21,7 @@ const yahooFinance = new YahooFinance({
 export interface ExecutedTrade {
   symbol: string;
   quantity: number;
+  actualFilledQty: number;
   fillPrice: number;
   limitPrice: number;
   stopPrice: number;
@@ -26,6 +29,8 @@ export interface ExecutedTrade {
   entryOrderId: number;
   stopOrderId?: number;
   tpOrderId?: number;
+  conId: number;
+  tradeIntentId: string;
   positionSizeUsd: number;
   signal: string;
   strength: number;
@@ -39,11 +44,13 @@ export class OrderExecutor {
   private ibkr: IBKRConnection;
   private getStatus: () => TradingStatus;
   private onNotify: NotifyFn;
+  private tracker: OrderStateTracker;
 
-  constructor(ibkr: IBKRConnection, getStatus: () => TradingStatus, onNotify: NotifyFn) {
+  constructor(ibkr: IBKRConnection, getStatus: () => TradingStatus, onNotify: NotifyFn, tracker: OrderStateTracker) {
     this.ibkr = ibkr;
     this.getStatus = getStatus;
     this.onNotify = onNotify;
+    this.tracker = tracker;
   }
 
   /**
@@ -242,21 +249,21 @@ export class OrderExecutor {
 
     console.log(`[executor] Placing: BUY ${quantity} ${candidate.symbol} LMT@${limitPrice} | STP@${stopPrice} | TP@${takeProfitPrice}`);
 
-    // Step 1: Record BUY order as submitted
-    const now = new Date().toISOString();
-    const entryRecord: OrderRecord = {
-      id: `ORD-${Date.now()}`,
-      symbol: candidate.symbol,
-      side: "BUY",
-      quantity,
-      price: limitPrice,
-      status: "Submitted",
-      orderType: "LMT",
-      timestamp: now,
-    };
-    appendOrder(entryRecord);
+    // Resolve conId before placing (separate reqId, not order sequencer)
+    let conId: number;
+    try {
+      conId = await this.ibkr.resolveContractId(candidate.symbol, exchange, currency);
+    } catch (e) {
+      console.warn(`[executor] resolveContractId failed for ${candidate.symbol}:`, e instanceof Error ? e.message : e);
+      return null;
+    }
 
-    // Step 2: Place bracket order (BUY → wait fill → STP + TP)
+    // Build tradeIntentId: SYMBOL-YYMMDD-nn
+    const now = new Date();
+    const seq = this.tracker.getMaxTradeIntentSeq(candidate.symbol, now) + 1;
+    const tradeIntentId = buildTradeIntentId(candidate.symbol, now, seq);
+
+    // Place bracket order (E5: entry + fill-monitoring + auto-exits)
     const result = await this.ibkr.placeBracketOrder({
       symbol: candidate.symbol,
       exchange,
@@ -265,71 +272,22 @@ export class OrderExecutor {
       limitPrice,
       stopPrice,
       takeProfitPrice,
+      tradeIntentId,
+      conId,
     });
 
-    // Step 3: Record results based on what happened
-    if (result.entry.status === "Cancelled") {
-      // BUY didn't fill — update record
-      appendOrder({
-        ...entryRecord,
-        id: entryRecord.id + "-cancelled",
-        status: "Cancelled",
-        timestamp: new Date().toISOString(),
-      });
+    // No fill at all → return null
+    if (result.actualFilledQty === 0) {
       console.log(`[executor] ${candidate.symbol} BUY not filled, cancelled`);
       return null;
     }
 
-    // BUY filled — update entry record and record exit orders
     const fillPrice = result.entry.fillPrice || limitPrice;
-    appendOrder({
-      id: `ORD-${result.entry.orderId}`,
-      symbol: candidate.symbol,
-      side: "BUY",
-      quantity,
-      price: fillPrice,
-      status: "Filled",
-      orderType: "LMT",
-      fillPrice,
-      fillTimestamp: new Date().toISOString(),
-      timestamp: now,
-    });
-
-    // Record stop-loss (now active, waiting to trigger)
-    if (result.stopLoss) {
-      appendOrder({
-        id: `ORD-${result.stopLoss.orderId}`,
-        symbol: candidate.symbol,
-        side: "SELL",
-        quantity,
-        price: stopPrice,
-        status: "Submitted",
-        orderType: "STP",
-        parentOrderId: `ORD-${result.entry.orderId}`,
-        ocaGroup: `OCA_${candidate.symbol}`,
-        timestamp: new Date().toISOString(),
-      });
-    }
-
-    // Record take-profit (now active, waiting to trigger)
-    if (result.takeProfit) {
-      appendOrder({
-        id: `ORD-${result.takeProfit.orderId}`,
-        symbol: candidate.symbol,
-        side: "SELL",
-        quantity,
-        price: takeProfitPrice,
-        status: "Submitted",
-        orderType: "LMT",
-        parentOrderId: `ORD-${result.entry.orderId}`,
-        ocaGroup: `OCA_${candidate.symbol}`,
-        timestamp: new Date().toISOString(),
-      });
-    }
 
     const trade: ExecutedTrade = {
       symbol: candidate.symbol,
       quantity,
+      actualFilledQty: result.actualFilledQty,
       fillPrice,
       limitPrice,
       stopPrice,
@@ -337,14 +295,19 @@ export class OrderExecutor {
       entryOrderId: result.entry.orderId,
       stopOrderId: result.stopLoss?.orderId,
       tpOrderId: result.takeProfit?.orderId,
-      positionSizeUsd: quantity * fillPrice,
+      conId,
+      tradeIntentId,
+      positionSizeUsd: result.actualFilledQty * fillPrice,
       signal: candidate.signal,
       strength: candidate.strength,
       aiConfidence: aiDecision.confidence,
       aiReasoning: aiDecision.reasoning,
     };
 
-    console.log(`[executor] ${candidate.symbol}: FILLED @ $${fillPrice} | STP $${stopPrice} | TP $${takeProfitPrice}`);
+    console.log(
+      `[executor] ${candidate.symbol}: FILLED ${result.actualFilledQty}/${quantity} @ $${fillPrice} | ` +
+      `STP $${stopPrice} | TP $${takeProfitPrice} | intent=${tradeIntentId}`,
+    );
     return trade;
   }
 

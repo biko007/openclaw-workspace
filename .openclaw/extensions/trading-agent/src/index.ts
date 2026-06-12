@@ -14,6 +14,7 @@ import {
   reconcileOpenIntents,
   checkFallbackClose,
   type GuardianConfig,
+  type GuardianAlertCache,
   type QuoteSnapshot,
 } from "./position-guardian.js";
 import { UniverseManager } from "./universe-manager.js";
@@ -123,6 +124,7 @@ const GUARDIAN_CONFIG: GuardianConfig = {
 const guardianRetryTracker = new Map<string, { count: number; windowStart: number }>();
 const guardianSymbolLocks = new Map<string, Promise<void>>();
 const guardianQuoteCache = new Map<number, QuoteSnapshot>();
+const guardianAlertCache: GuardianAlertCache = new Map();
 let lastClassification: ClassificationResult | null = null;
 let lastSyncSnapshot: SyncSnapshot | null = null;
 
@@ -977,6 +979,7 @@ async function runClassificationAndGuardian(snapshot: SyncSnapshot): Promise<voi
     const actions = await runGuardianCycle(
       classification, snapshot, ibkr, tracker, alertManager,
       GUARDIAN_CONFIG, guardianRetryTracker, guardianSymbolLocks, guardianQuoteCache,
+      guardianAlertCache,
     );
     const actionSummary = actions.filter((a) => a.type !== "noop");
     if (actionSummary.length > 0) {

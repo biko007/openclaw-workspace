@@ -216,6 +216,8 @@ export async function checkFallbackClose(
   if (quoteAge > config.quoteMaxAgeSec) return null;
   if (quote.bid <= 0 || quote.ask <= 0) return null;
   if (quote.ask / quote.bid > 1.10) return null;
+  // getQuoteSnapshot can resolve with last=0 on timeout — 0 <= stop would falsely trigger fallback
+  if (quote.last <= 0) return null;
 
   // Gate 4: market open
   if (!isMarketOpen()) return null;
@@ -449,6 +451,15 @@ export async function runGuardianCycle(
       const stopOrderId = ibkr.sequencer.next();
       const tpOrderId = ibkr.sequencer.next();
 
+      // Increment retry counter BEFORE placement attempt — failed attempts
+      // must consume the budget to prevent infinite retry loops on persistent errors
+      let r = retryTracker.get(cp.symbol);
+      if (!r) {
+        r = { count: 0, windowStart: now };
+        retryTracker.set(cp.symbol, r);
+      }
+      r.count++;
+
       try {
         switch (cp.state) {
           case "missing_tp": {
@@ -627,14 +638,6 @@ export async function runGuardianCycle(
           default:
             return { type: "noop", symbol: cp.symbol, reason: `unhandled state ${cp.state}` };
         }
-
-        // Track retry
-        let r = retryTracker.get(cp.symbol);
-        if (!r) {
-          r = { count: 0, windowStart: now };
-          retryTracker.set(cp.symbol, r);
-        }
-        r.count++;
 
         console.log(`[guardian] ${cp.symbol}: ${cp.state} \u2192 replacement gen=${newGen}`);
         return { type: "replacement", symbol: cp.symbol, reason: cp.state };

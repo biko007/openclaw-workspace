@@ -686,6 +686,78 @@ describe("Position Guardian (E4)", () => {
     expect(ibkr.placedMarketSells).toHaveLength(0);
   });
 
+  it("20. fallback with quote.last=0 + valid bid/ask → no close", async () => {
+    const ibkr = new StubIBKR();
+    const tracker = new StubTracker();
+    const alerts = new StubAlertManager();
+    setupTrackerForConId(tracker);
+    tracker.setExitState(conId, null);
+
+    const snapshot = makeSnapshot({
+      timestamp: new Date().toISOString(),
+      positions: [{ symbol: "AAPL", conId, exchange: "SMART", currency: "USD", quantity: 100, avgCost: 150 }],
+    });
+
+    const cp = makePosition({ state: "missing_both", gen: 0 });
+
+    // bid/ask valid, but last=0 (getQuoteSnapshot timeout artifact)
+    const quoteCache = new Map<number, QuoteSnapshot>();
+    quoteCache.set(conId, { bid: 135, ask: 136, last: 0, timestamp: Date.now() });
+
+    const result = await checkFallbackClose(
+      cp, snapshot, ibkr as any, tracker as any, alerts as any,
+      defaultConfig, quoteCache, new Map(),
+    );
+
+    // Gate 3 blocks: last <= 0 → null, no close regardless of market hours
+    expect(result).toBeNull();
+    expect(ibkr.placedMarketSells).toHaveLength(0);
+  });
+
+  it("21. two failed placements consume budget → third cycle CRITICAL only", async () => {
+    const tracker = new StubTracker();
+    const alerts = new StubAlertManager();
+    setupTrackerForConId(tracker);
+
+    const classification = makeClassification([
+      makePosition({ state: "missing_both", gen: 0 }),
+    ]);
+    const snapshot = makeSnapshot();
+    const retries = new Map<string, { count: number; windowStart: number }>();
+
+    // Cycle 1: placement throws → budget consumed
+    const ibkr1 = new StubIBKR();
+    ibkr1.placeGuardianOrders = async () => { throw new Error("IBKR disconnect"); };
+    await runGuardianCycle(
+      classification, snapshot, ibkr1 as any, tracker as any, alerts as any,
+      defaultConfig, retries, new Map(), new Map(),
+    );
+    expect(retries.get("AAPL")!.count).toBe(1);
+
+    // Cycle 2: placement throws again → budget consumed
+    const ibkr2 = new StubIBKR();
+    ibkr2.placeGuardianOrders = async () => { throw new Error("IBKR disconnect"); };
+    alerts.alerts.length = 0;
+    await runGuardianCycle(
+      classification, snapshot, ibkr2 as any, tracker as any, alerts as any,
+      defaultConfig, retries, new Map(), new Map(),
+    );
+    expect(retries.get("AAPL")!.count).toBe(2);
+
+    // Cycle 3: budget exhausted → CRITICAL alert only, no placement attempt
+    const ibkr3 = new StubIBKR();
+    alerts.alerts.length = 0;
+    const actions = await runGuardianCycle(
+      classification, snapshot, ibkr3 as any, tracker as any, alerts as any,
+      defaultConfig, retries, new Map(), new Map(),
+    );
+    expect(actions).toHaveLength(1);
+    expect(actions[0].type).toBe("alert_only");
+    expect(actions[0].reason).toContain("retry limit");
+    expect(ibkr3.placedGuardianOrders).toHaveLength(0);
+    expect(alerts.alerts.some((a) => a.severity === "CRITICAL")).toBe(true);
+  });
+
   it("19. intent reconciliation: found → replacement_intent_confirmed", () => {
     const tracker = new StubTracker();
     const stopR = ref("stop", 1);

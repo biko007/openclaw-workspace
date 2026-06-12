@@ -1180,6 +1180,243 @@ export class IBKRConnection extends EventEmitter {
     };
   }
 
+  // ── Guardian Methods (E4) ──
+
+  /**
+   * Place STP+TP pair for guardian replacement.
+   * ocaType=2, transmit=true (no parentId), GTC, outsideRth=false.
+   */
+  async placeGuardianOrders(params: {
+    stopOrderId: number;
+    tpOrderId: number;
+    stopRef: string;
+    tpRef: string;
+    symbol: string;
+    exchange: string;
+    currency: string;
+    quantity: number;
+    stopPrice: number;
+    tpPrice: number;
+    ocaGroup: string;
+  }): Promise<void> {
+    if (!this.api || !this.isConnected()) {
+      throw new Error("IBKR not connected");
+    }
+    const contract: Contract = {
+      symbol: params.symbol,
+      secType: SecType.STK,
+      exchange: params.exchange || "SMART",
+      currency: params.currency || "USD",
+    };
+
+    const stopOrder: Order = {
+      orderId: params.stopOrderId,
+      action: OrderAction.SELL,
+      orderType: OrderType.STP,
+      totalQuantity: params.quantity,
+      auxPrice: params.stopPrice,
+      tif: TimeInForce.GTC,
+      ocaGroup: params.ocaGroup,
+      ocaType: 2,
+      transmit: true,
+      outsideRth: false,
+      orderRef: params.stopRef,
+    };
+
+    const tpOrder: Order = {
+      orderId: params.tpOrderId,
+      action: OrderAction.SELL,
+      orderType: OrderType.LMT,
+      totalQuantity: params.quantity,
+      lmtPrice: params.tpPrice,
+      tif: TimeInForce.GTC,
+      ocaGroup: params.ocaGroup,
+      ocaType: 2,
+      transmit: true,
+      outsideRth: false,
+      orderRef: params.tpRef,
+    };
+
+    this.registerOrderRef(params.stopOrderId, params.stopRef);
+    this.registerOrderRef(params.tpOrderId, params.tpRef);
+
+    this.api.placeOrder(params.stopOrderId, contract, stopOrder);
+    this.api.placeOrder(params.tpOrderId, contract, tpOrder);
+
+    console.log(
+      `[ibkr] Guardian STP@${params.stopPrice} + TP@${params.tpPrice} ` +
+      `qty=${params.quantity} ${params.symbol} (OCA: ${params.ocaGroup})`,
+    );
+  }
+
+  /**
+   * Cancel a guardian order and wait for Cancelled/ApiCancelled status.
+   */
+  async cancelGuardianOrder(orderId: number, timeoutMs = 10_000): Promise<boolean> {
+    if (!this.api || !this.isConnected()) return false;
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve(false);
+      }, timeoutMs);
+
+      const onStatus = (id: number, status: string) => {
+        if (id !== orderId) return;
+        if (status === "Cancelled" || status === "ApiCancelled") {
+          clearTimeout(timeout);
+          cleanup();
+          resolve(true);
+        }
+      };
+
+      const onError = (id: number) => {
+        if (id !== orderId) return;
+        clearTimeout(timeout);
+        cleanup();
+        resolve(false);
+      };
+
+      const cleanup = () => {
+        this.removeListener("orderStatus", onStatus);
+        this.removeListener("orderError", onError);
+      };
+
+      this.on("orderStatus", onStatus);
+      this.on("orderError", onError);
+      this.api!.cancelOrder(orderId);
+    });
+  }
+
+  /**
+   * Wait for first non-Error orderStatus (Submitted/PreSubmitted/Inactive).
+   * For I4 confirmation before cancelling old orders.
+   */
+  async waitForOrderAck(orderId: number, timeoutMs = 10_000): Promise<boolean> {
+    if (!this.api || !this.isConnected()) return false;
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve(false);
+      }, timeoutMs);
+
+      const onStatus = (id: number, status: string) => {
+        if (id !== orderId) return;
+        if (status === "Submitted" || status === "PreSubmitted" || status === "Inactive") {
+          clearTimeout(timeout);
+          cleanup();
+          resolve(true);
+        }
+        if (status === "Cancelled" || status === "ApiCancelled") {
+          clearTimeout(timeout);
+          cleanup();
+          resolve(false);
+        }
+      };
+
+      const onError = (id: number) => {
+        if (id !== orderId) return;
+        clearTimeout(timeout);
+        cleanup();
+        resolve(false);
+      };
+
+      const cleanup = () => {
+        this.removeListener("orderStatus", onStatus);
+        this.removeListener("orderError", onError);
+      };
+
+      this.on("orderStatus", onStatus);
+      this.on("orderError", onError);
+    });
+  }
+
+  /**
+   * Place a guardian fallback-close market sell with orderRef tracking.
+   */
+  async placeGuardianMarketSell(params: {
+    orderId: number;
+    orderRef: string;
+    symbol: string;
+    exchange: string;
+    currency: string;
+    quantity: number;
+  }): Promise<{ filled: boolean; avgFillPrice: number }> {
+    if (!this.api || !this.isConnected()) {
+      throw new Error("IBKR not connected");
+    }
+    const contract: Contract = {
+      symbol: params.symbol,
+      secType: SecType.STK,
+      exchange: params.exchange || "SMART",
+      currency: params.currency || "USD",
+    };
+    const order: Order = {
+      orderId: params.orderId,
+      action: OrderAction.SELL,
+      orderType: OrderType.MKT,
+      totalQuantity: params.quantity,
+      transmit: true,
+      orderRef: params.orderRef,
+    };
+    this.registerOrderRef(params.orderId, params.orderRef);
+    console.log(`[ibkr] Guardian MKT SELL ${params.quantity} ${params.symbol} (ref=${params.orderRef})`);
+    return this.placeAndWaitForFill(params.orderId, contract, order, 30_000);
+  }
+
+  /**
+   * One-shot reqMktData snapshot for fallback-close gate.
+   * Returns {bid, ask, last, timestamp} or null if unavailable.
+   */
+  async getQuoteSnapshot(
+    symbol: string,
+    conId: number,
+    exchange: string,
+    currency: string,
+    timeoutMs = 5_000,
+  ): Promise<{ bid: number; ask: number; last: number; timestamp: number } | null> {
+    if (!this.api || !this.isConnected()) return null;
+    const reqId = this.nextReqId++;
+    const contract: Contract = {
+      symbol,
+      secType: SecType.STK,
+      exchange: exchange || "SMART",
+      currency: currency || "USD",
+    };
+
+    return new Promise((resolve) => {
+      let bid = 0;
+      let ask = 0;
+      let last = 0;
+      let received = false;
+
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve(received ? { bid, ask, last, timestamp: Date.now() } : null);
+      }, timeoutMs);
+
+      const onTick = (id: number, tickType: TickType, price: number) => {
+        if (id !== reqId || price <= 0) return;
+        received = true;
+        if (tickType === 1) bid = price;
+        else if (tickType === 2) ask = price;
+        else if (tickType === 4) last = price;
+        if (bid > 0 && ask > 0 && last > 0) {
+          clearTimeout(timeout);
+          cleanup();
+          resolve({ bid, ask, last, timestamp: Date.now() });
+        }
+      };
+
+      const cleanup = () => {
+        (this.api as any)?.removeListener(EventName.tickPrice, onTick);
+        try { this.api?.cancelMktData(reqId); } catch { /* ignore */ }
+      };
+
+      this.api!.on(EventName.tickPrice, onTick);
+      this.api!.reqMktData(reqId, contract, "", true, false);
+    });
+  }
+
   /**
    * Place an order and wait for fill confirmation from IBKR.
    * Listens on IBKRConnection (stable), not this.api (transient).

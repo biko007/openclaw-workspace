@@ -532,6 +532,25 @@ export class OrderStateTracker {
     return this.latestStatusByRef.get(orderRef);
   }
 
+  /**
+   * Get all known orderRefs for a conId (for price extraction and tradeIntentId lookup).
+   */
+  getOrderRefsForConId(conId: number): Set<string> {
+    return this.orderRefsByConId.get(conId) ?? new Set();
+  }
+
+  /**
+   * Get the order_submitted event for an orderRef (for auxPrice/limitPrice extraction).
+   */
+  getSubmittedEvent(orderRef: string): OrderSubmittedEvent | null {
+    const events = this.eventsByOrderRef.get(orderRef);
+    if (!events) return null;
+    for (const ev of events) {
+      if (ev.type === "order_submitted") return ev as OrderSubmittedEvent;
+    }
+    return null;
+  }
+
   get tradingLocked(): boolean {
     return this._tradingLocked;
   }

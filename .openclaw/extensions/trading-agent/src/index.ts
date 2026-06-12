@@ -8,7 +8,14 @@ import express from "express";
 import YahooFinance from "yahoo-finance2";
 import { IBKRConnection, type Position, type ExitFillInfo, type SyncSnapshot } from "./ibkr.js";
 import { DurableEventLog, OrderStateTracker } from "./order-state-tracker.js";
-import { classifyPositions } from "./position-classifier.js";
+import { classifyPositions, type ClassificationResult } from "./position-classifier.js";
+import {
+  runGuardianCycle,
+  reconcileOpenIntents,
+  checkFallbackClose,
+  type GuardianConfig,
+  type QuoteSnapshot,
+} from "./position-guardian.js";
 import { UniverseManager } from "./universe-manager.js";
 import { OrderExecutor } from "./executor.js";
 import {
@@ -108,6 +115,18 @@ let lastReportDay = -1; // track daily report
 let lastHealthCheckDay = -1; // track daily health check
 let lastEarningsRefreshDay = -1; // track daily earnings cache refresh
 const loggedLegacyOrders = new Set<number>(); // E3b: dedupe legacy-own logs
+
+// ── Guardian state (E4) ──
+const GUARDIAN_CONFIG: GuardianConfig = {
+  fallbackMode: (process.env.GUARDIAN_FALLBACK_MODE as "market_close" | "alert_only") || "market_close",
+  maxRetriesPerHour: 2,
+  quoteMaxAgeSec: 90,
+};
+const guardianRetryTracker = new Map<string, { count: number; windowStart: number }>();
+const guardianSymbolLocks = new Map<string, Promise<void>>();
+const guardianQuoteCache = new Map<number, QuoteSnapshot>();
+let lastClassification: ClassificationResult | null = null;
+let lastSyncSnapshot: SyncSnapshot | null = null;
 
 // ── Watchdog state ──
 const WATCHDOG_INTERVAL = 5 * 60 * 1000; // 5 minutes
@@ -257,6 +276,37 @@ async function pollIBKR(): Promise<void> {
     refreshEarningsCache().catch((e) =>
       console.log("[earnings] Daily refresh error:", e instanceof Error ? e.message : e),
     );
+  }
+
+  // ── Guardian: Quote cache refresh + Fallback-Close check (E4) ──
+  if (connected && lastClassification && lastSyncSnapshot) {
+    const legacyConIds = new Set<number>();
+    for (const lo of lastClassification.legacyOwn) {
+      legacyConIds.add(lo.conId);
+    }
+
+    for (const cp of lastClassification.positions) {
+      if (cp.state !== "protected") {
+        try {
+          const quote = await ibkr.getQuoteSnapshot(cp.symbol, cp.conId, cp.exchange, cp.currency);
+          if (quote) guardianQuoteCache.set(cp.conId, quote);
+        } catch { /* ignore */ }
+      }
+    }
+
+    // Fallback close check with cached classification
+    if (!ibkr.guardianLocked && !ibkr.syncInProgress && !tracker.tradingLocked) {
+      for (const cp of lastClassification.positions) {
+        if (cp.state === "protected" || cp.state === "foreign_involved" ||
+            cp.state === "unreconstructable" || legacyConIds.has(cp.conId)) continue;
+        try {
+          await checkFallbackClose(cp, lastSyncSnapshot, ibkr, tracker, alertManager,
+            GUARDIAN_CONFIG, guardianQuoteCache, guardianSymbolLocks);
+        } catch (e) {
+          console.error(`[guardian] Fallback check error for ${cp.symbol}:`, e instanceof Error ? e.message : e);
+        }
+      }
+    }
   }
 }
 
@@ -869,9 +919,9 @@ app.post("/earnings/refresh", (_req, res) => {
   );
 });
 
-// ── Classification (E3b) ──
+// ── Classification (E3b) + Guardian (E4) ──
 
-function runClassification(snapshot: SyncSnapshot): void {
+async function runClassificationAndGuardian(snapshot: SyncSnapshot): Promise<void> {
   const classification = classifyPositions(snapshot, tracker, ibkr.getAccount());
 
   // One-time legacy-own log (deduped by orderId)
@@ -893,6 +943,32 @@ function runClassification(snapshot: SyncSnapshot): void {
     `orphans=[${classification.orphans.map((o) => o.orderRef).join(",")}] ` +
     `foreign=[${classification.foreignCount}]`,
   );
+
+  // Cache for fallback-close between sync barriers
+  lastClassification = classification;
+  lastSyncSnapshot = snapshot;
+
+  // Guardian gating
+  if (ibkr.guardianLocked || ibkr.syncInProgress || tracker.tradingLocked) {
+    console.log(`[guardian] Skipped: guardianLocked=${ibkr.guardianLocked} syncInProgress=${ibkr.syncInProgress} tradingLocked=${tracker.tradingLocked}`);
+    return;
+  }
+
+  // Run guardian cycle
+  try {
+    const actions = await runGuardianCycle(
+      classification, snapshot, ibkr, tracker, alertManager,
+      GUARDIAN_CONFIG, guardianRetryTracker, guardianSymbolLocks, guardianQuoteCache,
+    );
+    const actionSummary = actions.filter((a) => a.type !== "noop");
+    if (actionSummary.length > 0) {
+      console.log(`[guardian] Actions: ${actionSummary.map((a) => `${a.symbol}:${a.type}`).join(", ")}`);
+    } else {
+      console.log("[guardian] No actions needed");
+    }
+  } catch (e) {
+    console.error("[guardian] Cycle error:", e instanceof Error ? e.message : e);
+  }
 }
 
 // ── Startup ──
@@ -913,7 +989,7 @@ async function start(): Promise<void> {
     try {
       const snapshot = await ibkr.runSyncBarrier({ isReconnect: true });
       console.log(`[trading-agent] Reconnect sync: ${snapshot.ownOrders.length} own, ${snapshot.foreignOrders.length} foreign`);
-      runClassification(snapshot);
+      await runClassificationAndGuardian(snapshot);
     } catch (e) {
       console.warn("[trading-agent] Sync barrier failed on reconnect:", e instanceof Error ? e.message : e);
     }
@@ -997,7 +1073,12 @@ async function start(): Promise<void> {
         `[trading-agent] Sync barrier: ${snapshot.ownOrders.length} own, ` +
         `${snapshot.foreignOrders.length} foreign, ${snapshot.positions.length} positions`,
       );
-      runClassification(snapshot);
+      // E4: reconcile open intents from previous session before guardian
+      const openIntents = tracker.getOpenIntents();
+      if (openIntents.length > 0) {
+        reconcileOpenIntents(openIntents, snapshot, tracker);
+      }
+      await runClassificationAndGuardian(snapshot);
     } catch (e) {
       console.warn("[trading-agent] Sync barrier failed at startup:", e instanceof Error ? e.message : e);
     }
@@ -1037,7 +1118,7 @@ async function start(): Promise<void> {
     if (!ibkr.isConnected() || ibkr.syncInProgress) return;
     try {
       const snapshot = await ibkr.runSyncBarrier({ isReconnect: false });
-      runClassification(snapshot);
+      await runClassificationAndGuardian(snapshot);
     } catch (e) {
       console.warn("[sync] Periodic sync error:", e instanceof Error ? e.message : e);
     }

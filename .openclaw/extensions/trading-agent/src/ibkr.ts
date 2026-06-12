@@ -82,6 +82,71 @@ export interface ExitFillInfo {
   entryPrice?: number;
 }
 
+// ── Sync Barrier Types (E3a) ──
+
+export interface SyncPosition {
+  symbol: string;
+  conId: number;
+  exchange: string;
+  currency: string;
+  quantity: number;
+  avgCost: number;
+}
+
+export interface SyncOpenOrder {
+  orderId: number;
+  permId?: number;
+  clientId?: number;
+  symbol: string;
+  conId: number;
+  action: string;
+  orderType: string;
+  totalQuantity: number;
+  lmtPrice?: number;
+  auxPrice?: number;
+  tif: string;
+  ocaGroup: string;
+  ocaType?: number;
+  status: string;
+  parentId: number;
+  orderRef: string;
+}
+
+export interface SyncExecution {
+  orderId: number;
+  symbol: string;
+  conId: number;
+  side: string;
+  shares: number;
+  price: number;
+  cumQty: number;
+  avgPrice: number;
+  execId: string;
+  time: string;
+  orderRef: string;
+}
+
+export interface SyncCompletedOrder {
+  symbol: string;
+  conId: number;
+  action: string;
+  totalQuantity: number;
+  status: string;
+  orderRef: string;
+  permId?: number;
+}
+
+export interface SyncSnapshot {
+  readonly timestamp: string;
+  readonly ownOrders: readonly SyncOpenOrder[];
+  readonly foreignOrders: readonly SyncOpenOrder[];
+  readonly positions: readonly SyncPosition[];
+  readonly backfilledExecutions: readonly SyncExecution[];
+  readonly completedOrders: readonly SyncCompletedOrder[];
+  readonly isReconnect: boolean;
+  readonly timedOutPhases: readonly string[];
+}
+
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
 const BACKOFF_STEPS = [5_000, 10_000, 30_000, 60_000, 120_000];
@@ -99,6 +164,10 @@ export class IBKRConnection extends EventEmitter {
   private account = "";
   private _tracker: OrderStateTracker | null = null;
   private _orderIdToRef = new Map<number, string>();
+  private _syncInProgress = false;
+  private _guardianLocked = false;
+  private _reconnectCooldownUntil = 0;
+  private _lastExecSyncTime: string | null = null;
 
   constructor() {
     super();
@@ -286,6 +355,18 @@ export class IBKRConnection extends EventEmitter {
 
   get reconnectAttempts(): number {
     return this._reconnectAttempt;
+  }
+
+  get guardianLocked(): boolean {
+    return this._guardianLocked;
+  }
+
+  get syncInProgress(): boolean {
+    return this._syncInProgress;
+  }
+
+  isReconnectCooldownActive(): boolean {
+    return Date.now() < this._reconnectCooldownUntil;
   }
 
   async connect(): Promise<void> {
@@ -492,6 +573,314 @@ export class IBKRConnection extends EventEmitter {
         "NetLiquidation,TotalCashValue,UnrealizedPnL,RealizedPnL",
       );
     });
+  }
+
+  // ── Sync Barrier (E3a) ──
+
+  async runSyncBarrier(options?: { isReconnect?: boolean }): Promise<SyncSnapshot> {
+    const isReconnect = options?.isReconnect ?? false;
+    const PHASE_TIMEOUT = 30_000;
+
+    if (this._syncInProgress) {
+      throw new Error("Sync barrier already in progress");
+    }
+    if (!this.api || !this.isConnected()) {
+      throw new Error("IBKR not connected");
+    }
+
+    this._syncInProgress = true;
+    this._guardianLocked = true;
+    const timedOutPhases: string[] = [];
+    const isInitialOrReconnect = isReconnect || this._lastExecSyncTime === null;
+
+    try {
+      if (isReconnect) {
+        this._reconnectCooldownUntil = Date.now() + 60_000;
+        console.log("[sync-barrier] Reconnect cooldown set for 60s");
+      }
+
+      // Phase 1: All open orders
+      const allOrders = await this._collectOpenOrders(PHASE_TIMEOUT, timedOutPhases);
+
+      // Phase 2: Positions
+      const positions = await this._collectPositions(PHASE_TIMEOUT, timedOutPhases);
+
+      // Phase 3: Executions backfill + completed orders (only at start/reconnect)
+      let executions: SyncExecution[] = [];
+      let completedOrders: SyncCompletedOrder[] = [];
+      if (isInitialOrReconnect) {
+        executions = await this._collectExecutions(PHASE_TIMEOUT, timedOutPhases);
+        completedOrders = await this._collectCompletedOrders(PHASE_TIMEOUT, timedOutPhases);
+        this._lastExecSyncTime = this._formatExecTime(new Date());
+      }
+
+      // Phase 4: Sequencer re-arm from all seen orderIds
+      for (const order of allOrders) {
+        this._sequencer.trackSeenId(order.orderId);
+      }
+      for (const exec of executions) {
+        if (exec.orderId > 0) {
+          this._sequencer.trackSeenId(exec.orderId);
+        }
+      }
+
+      // Phase 5: Foreign-order filter (I2)
+      const ownOrders: SyncOpenOrder[] = [];
+      const foreignOrders: SyncOpenOrder[] = [];
+      for (const order of allOrders) {
+        if (order.orderRef && isOwnOrderRef(order.orderRef)) {
+          ownOrders.push(order);
+        } else {
+          foreignOrders.push(order);
+        }
+      }
+
+      // Phase 6: Freeze snapshot
+      const snapshot: SyncSnapshot = Object.freeze({
+        timestamp: new Date().toISOString(),
+        ownOrders: Object.freeze(ownOrders),
+        foreignOrders: Object.freeze(foreignOrders),
+        positions: Object.freeze([...positions]),
+        backfilledExecutions: Object.freeze(executions),
+        completedOrders: Object.freeze(completedOrders),
+        isReconnect,
+        timedOutPhases: Object.freeze([...timedOutPhases]),
+      });
+
+      if (timedOutPhases.length > 0) {
+        console.warn(`[sync-barrier] Completed with timeouts: ${timedOutPhases.join(", ")}`);
+      } else {
+        console.log(
+          `[sync-barrier] Complete: ${ownOrders.length} own, ${foreignOrders.length} foreign, ` +
+          `${positions.length} pos, ${executions.length} exec, ${completedOrders.length} completed`,
+        );
+      }
+
+      this.emit("syncComplete", snapshot);
+      return snapshot;
+    } finally {
+      this._syncInProgress = false;
+      this._guardianLocked = false;
+    }
+  }
+
+  private _collectOpenOrders(
+    timeoutMs: number,
+    timedOutPhases: string[],
+  ): Promise<SyncOpenOrder[]> {
+    return new Promise((resolve) => {
+      const orders: SyncOpenOrder[] = [];
+      const timeout = setTimeout(() => {
+        console.warn("[sync-barrier] WARN: reqAllOpenOrders timed out");
+        timedOutPhases.push("openOrders");
+        cleanup();
+        resolve(orders);
+      }, timeoutMs);
+
+      const onOpenOrder = (
+        orderId: number,
+        contract: Contract,
+        order: Order,
+        orderState: OrderState,
+      ) => {
+        orders.push({
+          orderId,
+          permId: order.permId,
+          clientId: order.clientId,
+          symbol: contract.symbol ?? "",
+          conId: contract.conId ?? 0,
+          action: order.action ?? "",
+          orderType: order.orderType ?? "",
+          totalQuantity: order.totalQuantity ?? 0,
+          lmtPrice: order.lmtPrice,
+          auxPrice: order.auxPrice,
+          tif: order.tif ?? "",
+          ocaGroup: order.ocaGroup ?? "",
+          ocaType: order.ocaType,
+          status: String(orderState.status ?? ""),
+          parentId: order.parentId ?? 0,
+          orderRef: order.orderRef ?? "",
+        });
+      };
+
+      const onEnd = () => {
+        clearTimeout(timeout);
+        cleanup();
+        resolve(orders);
+      };
+
+      const cleanup = () => {
+        (this.api as any)?.removeListener(EventName.openOrder, onOpenOrder);
+        (this.api as any)?.removeListener(EventName.openOrderEnd, onEnd);
+      };
+
+      this.api!.on(EventName.openOrder, onOpenOrder);
+      this.api!.on(EventName.openOrderEnd, onEnd);
+      this.api!.reqAllOpenOrders();
+    });
+  }
+
+  private _collectPositions(
+    timeoutMs: number,
+    timedOutPhases: string[],
+  ): Promise<SyncPosition[]> {
+    return new Promise((resolve) => {
+      const positions: SyncPosition[] = [];
+      const timeout = setTimeout(() => {
+        console.warn("[sync-barrier] WARN: reqPositions timed out");
+        timedOutPhases.push("positions");
+        cleanup();
+        resolve(positions);
+      }, timeoutMs);
+
+      const onPosition = (
+        _account: string,
+        contract: Contract,
+        pos: number,
+        avgCost?: number,
+      ) => {
+        if (pos !== 0) {
+          positions.push({
+            symbol: contract.symbol || "",
+            conId: contract.conId ?? 0,
+            exchange: contract.primaryExch || contract.exchange || "",
+            currency: contract.currency || "USD",
+            quantity: pos,
+            avgCost: avgCost ?? 0,
+          });
+        }
+      };
+
+      const onEnd = () => {
+        clearTimeout(timeout);
+        cleanup();
+        resolve(positions);
+      };
+
+      const cleanup = () => {
+        (this.api as any)?.removeListener(EventName.position, onPosition);
+        (this.api as any)?.removeListener(EventName.positionEnd, onEnd);
+      };
+
+      this.api!.on(EventName.position, onPosition);
+      this.api!.on(EventName.positionEnd, onEnd);
+      this.api!.reqPositions();
+    });
+  }
+
+  private _collectExecutions(
+    timeoutMs: number,
+    timedOutPhases: string[],
+  ): Promise<SyncExecution[]> {
+    return new Promise((resolve) => {
+      const reqId = this.nextReqId++;
+      const executions: SyncExecution[] = [];
+      const timeout = setTimeout(() => {
+        console.warn("[sync-barrier] WARN: reqExecutions timed out");
+        timedOutPhases.push("executions");
+        cleanup();
+        resolve(executions);
+      }, timeoutMs);
+
+      const onExecDetails = (id: number, contract: Contract, execution: any) => {
+        if (id !== reqId) return;
+        executions.push({
+          orderId: execution.orderId ?? 0,
+          symbol: contract.symbol ?? "",
+          conId: contract.conId ?? 0,
+          side: execution.side ?? "",
+          shares: execution.shares ?? 0,
+          price: execution.price ?? 0,
+          cumQty: execution.cumQty ?? 0,
+          avgPrice: execution.avgPrice ?? 0,
+          execId: execution.execId ?? "",
+          time: execution.time ?? "",
+          orderRef: execution.orderRef ?? "",
+        });
+      };
+
+      const onEnd = (id: number) => {
+        if (id !== reqId) return;
+        clearTimeout(timeout);
+        cleanup();
+        resolve(executions);
+      };
+
+      const cleanup = () => {
+        (this.api as any)?.removeListener(EventName.execDetails, onExecDetails);
+        (this.api as any)?.removeListener(EventName.execDetailsEnd, onEnd);
+      };
+
+      this.api!.on(EventName.execDetails, onExecDetails);
+      this.api!.on(EventName.execDetailsEnd, onEnd);
+
+      const filter: { time?: string } = {};
+      if (this._lastExecSyncTime) {
+        filter.time = this._lastExecSyncTime;
+      } else {
+        filter.time = this._formatExecTime(new Date(), true);
+      }
+      this.api!.reqExecutions(reqId, filter);
+    });
+  }
+
+  private _collectCompletedOrders(
+    timeoutMs: number,
+    timedOutPhases: string[],
+  ): Promise<SyncCompletedOrder[]> {
+    return new Promise((resolve) => {
+      if (typeof (this.api as any)?.reqCompletedOrders !== "function") {
+        console.warn("[sync-barrier] reqCompletedOrders not available, skipping");
+        resolve([]);
+        return;
+      }
+
+      const orders: SyncCompletedOrder[] = [];
+      const timeout = setTimeout(() => {
+        console.warn("[sync-barrier] WARN: reqCompletedOrders timed out");
+        timedOutPhases.push("completedOrders");
+        cleanup();
+        resolve(orders);
+      }, timeoutMs);
+
+      const onCompleted = (contract: Contract, order: Order, orderState: OrderState) => {
+        orders.push({
+          symbol: contract.symbol ?? "",
+          conId: contract.conId ?? 0,
+          action: order.action ?? "",
+          totalQuantity: order.totalQuantity ?? 0,
+          status: String(orderState.status ?? ""),
+          orderRef: order.orderRef ?? "",
+          permId: order.permId,
+        });
+      };
+
+      const onEnd = () => {
+        clearTimeout(timeout);
+        cleanup();
+        resolve(orders);
+      };
+
+      const cleanup = () => {
+        (this.api as any)?.removeListener(EventName.completedOrder, onCompleted);
+        (this.api as any)?.removeListener(EventName.completedOrdersEnd, onEnd);
+      };
+
+      this.api!.on(EventName.completedOrder, onCompleted);
+      this.api!.on(EventName.completedOrdersEnd, onEnd);
+      (this.api as any).reqCompletedOrders(true);
+    });
+  }
+
+  private _formatExecTime(d: Date, startOfDay = false): string {
+    const yyyy = String(d.getUTCFullYear());
+    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(d.getUTCDate()).padStart(2, "0");
+    if (startOfDay) return `${yyyy}${mm}${dd}-00:00:00`;
+    const hh = String(d.getUTCHours()).padStart(2, "0");
+    const min = String(d.getUTCMinutes()).padStart(2, "0");
+    const ss = String(d.getUTCSeconds()).padStart(2, "0");
+    return `${yyyy}${mm}${dd}-${hh}:${min}:${ss}`;
   }
 
   reqMarketData(symbol: string, exchange: string, currency = "USD"): number {

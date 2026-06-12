@@ -878,10 +878,16 @@ async function start(): Promise<void> {
     console.log(`[trading-agent] IBKR state: ${state}`);
   });
 
-  // Wire reconnect events
-  ibkr.on("reconnected", () => {
-    console.log("[trading-agent] IBKR reconnected — resyncing positions");
+  // Wire reconnect events — sync barrier with 60s cooldown (E3a)
+  ibkr.on("reconnected", async () => {
+    console.log("[trading-agent] IBKR reconnected — running sync barrier");
     consecutiveWatchdogFailures = 0;
+    try {
+      const snapshot = await ibkr.runSyncBarrier({ isReconnect: true });
+      console.log(`[trading-agent] Reconnect sync: ${snapshot.ownOrders.length} own, ${snapshot.foreignOrders.length} foreign`);
+    } catch (e) {
+      console.warn("[trading-agent] Sync barrier failed on reconnect:", e instanceof Error ? e.message : e);
+    }
     pollIBKR().catch((e) => console.error("[trading-agent] Post-reconnect poll error:", e));
   });
 
@@ -938,11 +944,41 @@ async function start(): Promise<void> {
 
   try {
     await ibkr.connect();
+    // Wait for actual TCP connection (connect() resolves before connected event)
+    if (!ibkr.isConnected()) {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => { cleanup(); reject(new Error("timeout")); }, 10_000);
+        const onState = (state: string) => {
+          if (state === "connected") { cleanup(); resolve(); }
+          if (state === "error") { cleanup(); reject(new Error("connection error")); }
+        };
+        const cleanup = () => { clearTimeout(timeout); ibkr.removeListener("state", onState); };
+        ibkr.on("state", onState);
+      });
+    }
   } catch (e) {
     console.log("[trading-agent] IBKR not available, running in disconnected mode");
   }
 
-  // Initial poll — sync positions from IBKR before any trading
+  // Initial sync barrier (E3a) — collect orders, positions, executions
+  if (ibkr.isConnected()) {
+    try {
+      const snapshot = await ibkr.runSyncBarrier({ isReconnect: false });
+      console.log(
+        `[trading-agent] Sync barrier: ${snapshot.ownOrders.length} own, ` +
+        `${snapshot.foreignOrders.length} foreign, ${snapshot.positions.length} positions`,
+      );
+      if (snapshot.foreignOrders.length > 0) {
+        console.warn(
+          `[trading-agent] Foreign orders: ${snapshot.foreignOrders.map((o) => `${o.symbol}#${o.orderId}`).join(", ")}`,
+        );
+      }
+    } catch (e) {
+      console.warn("[trading-agent] Sync barrier failed at startup:", e instanceof Error ? e.message : e);
+    }
+  }
+
+  // Poll for account summary + Yahoo enrichment
   await pollIBKR();
   console.log(`[trading-agent] Initial sync: ${currentStatus.positions.length} positions, cash $${currentStatus.cashBalance.toFixed(0)}, net $${currentStatus.netLiquidation.toFixed(0)}`);
   console.log(`[trading-agent] Market: ${marketStatusLabel()}`);
@@ -968,6 +1004,21 @@ async function start(): Promise<void> {
     watchdogTick().catch((e) => console.error("[watchdog] Error:", e));
   }, WATCHDOG_INTERVAL);
   console.log("[watchdog] Started (interval: 5min)");
+
+  // Periodic sync barrier — 5 min cycle, independent of pollIBKR (E3a)
+  // Collects orders + positions only (no exec backfill on periodic runs)
+  const SYNC_BARRIER_INTERVAL = 5 * 60_000;
+  setInterval(async () => {
+    if (!ibkr.isConnected() || ibkr.syncInProgress) return;
+    try {
+      const snapshot = await ibkr.runSyncBarrier({ isReconnect: false });
+      console.log(
+        `[sync] Periodic: ${snapshot.ownOrders.length} own, ${snapshot.foreignOrders.length} foreign, ${snapshot.positions.length} pos`,
+      );
+    } catch (e) {
+      console.warn("[sync] Periodic sync error:", e instanceof Error ? e.message : e);
+    }
+  }, SYNC_BARRIER_INTERVAL);
 
   // Wire auto-execution callback for scheduled scans
   universeManager.onMomentumScan = async (results) => {

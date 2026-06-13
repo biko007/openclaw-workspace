@@ -192,7 +192,7 @@ export class OrderExecutor {
     // AI Decision Gate: Claude Sonnet evaluates before every order
     let aiDecision: TradeDecision;
     try {
-      aiDecision = await evaluateTrade(candidate, currentPrice, undefined, earningsInfo);
+      aiDecision = await evaluateTrade(candidate, currentPrice, undefined, earningsInfo, this.tracker);
       if (!shouldExecuteTrade(aiDecision)) {
         console.log(`[executor] AI SKIP ${candidate.symbol}: confidence=${aiDecision.confidence.toFixed(2)} — ${aiDecision.reasoning}`);
         return null;

@@ -127,8 +127,10 @@ const guardianQuoteCache = new Map<number, QuoteSnapshot>();
 const guardianAlertCache: GuardianAlertCache = new Map();
 let lastClassification: ClassificationResult | null = null;
 let lastSyncSnapshot: SyncSnapshot | null = null;
+let classificationCycleCount = 0; // E6: first-cycle grace — alerts suppressed on cycle 1
 
 // ── Watchdog state ──
+const WATCHDOG_EXITS_ESCALATION = 15 * 60 * 1000; // 15 min WARN→CRITICAL
 const WATCHDOG_INTERVAL = 5 * 60 * 1000; // 5 minutes
 let watchdogTimer: ReturnType<typeof setInterval> | null = null;
 let consecutiveWatchdogFailures = 0;
@@ -399,16 +401,38 @@ async function sendDailyReport(): Promise<void> {
   const orders = loadOrders();
   const today = new Date().toISOString().slice(0, 10);
 
-  // Today's trades
-  const todayOrders = orders.filter(
+  // E6: Merge tracker fills with legacy orders for today's trades
+  const trackerEntries = tracker.getRecentFills({ sinceDays: 1, leg: "entry" });
+  const trackerExits = tracker.getRecentFills({ sinceDays: 1 })
+    .filter((t) => t.side === "SELL");
+
+  // Today's trades (legacy + tracker, deduped by symbol+timestamp)
+  const legacyTodayEntries = orders.filter(
     (o) => o.timestamp.startsWith(today) && o.side === "BUY" && o.status === "Filled",
   );
+  const trackerTodayEntries = trackerEntries.filter(
+    (t) => t.timestamp.startsWith(today) && t.side === "BUY",
+  );
+  // Dedup: tracker entries that don't match any legacy entry by symbol+date
+  const legacyEntryKeys = new Set(legacyTodayEntries.map((o) => `${o.symbol}|${o.timestamp.slice(0, 16)}`));
+  const uniqueTrackerEntries = trackerTodayEntries.filter(
+    (t) => !legacyEntryKeys.has(`${t.symbol}|${t.timestamp.slice(0, 16)}`),
+  );
+  const todayOrderCount = legacyTodayEntries.length + uniqueTrackerEntries.length;
 
-  // Today's closed positions (SELL fills)
-  const todayExits = orders.filter(
+  // Today's closed positions (legacy + tracker SELL fills)
+  const todayOrders = legacyTodayEntries;
+  const legacyTodayExits = orders.filter(
     (o) => o.timestamp.startsWith(today) && o.side === "SELL" &&
       (o.status === "Filled" || o.status === "Stopped" || o.status === "TargetHit"),
   );
+  const trackerTodayExits = trackerExits.filter((t) => t.timestamp.startsWith(today));
+  const legacyExitKeys = new Set(legacyTodayExits.map((o) => `${o.symbol}|${o.timestamp.slice(0, 16)}`));
+  const uniqueTrackerExits = trackerTodayExits.filter(
+    (t) => !legacyExitKeys.has(`${t.symbol}|${t.timestamp.slice(0, 16)}`),
+  );
+  const todayExitCount = legacyTodayExits.length + uniqueTrackerExits.length;
+  const todayExits = legacyTodayExits;
 
   // Win/Loss from closed trades
   let wins = 0;
@@ -479,7 +503,7 @@ async function sendDailyReport(): Promise<void> {
     ``,
     `*${today}*`,
     ``,
-    `Trades heute: ${todayOrders.length} eröffnet, ${todayExits.length} geschlossen`,
+    `Trades heute: ${todayOrderCount} eröffnet, ${todayExitCount} geschlossen`,
     todayExits.length > 0 ? `Ergebnis: ${wins}W / ${losses}L` : "",
     `Tages-P&L: ${pnlSign}$${status.dailyPnl.toFixed(2)}`,
     ``,
@@ -487,6 +511,7 @@ async function sendDailyReport(): Promise<void> {
     worstPos ? `Schlechteste: ${worstPos}` : "",
     ``,
     `Offene Positionen: ${status.positions.length}`,
+    lastClassification ? `Exit-Coverage: ${lastClassification.stateCount["protected"] ?? 0}/${lastClassification.positions.length}` : "",
     `Net Liquidation: $${status.netLiquidation.toFixed(0)}`,
     ``,
     `*30-Tage-Statistik:*`,
@@ -613,6 +638,86 @@ async function watchdogTick(): Promise<void> {
     }
   }
 
+  // Check 4: Exit coverage (E6 — exits_incomplete + qty undercoverage)
+  // Skip on first cycle — classification may be based on incomplete openOrder stream
+  let exitsLabel = "?/?";
+  if (lastClassification && classificationCycleCount > 1) {
+    const total = lastClassification.positions.length;
+    const protectedCount = lastClassification.stateCount["protected"] ?? 0;
+    const exitsIncomplete = total - protectedCount;
+    exitsLabel = `${protectedCount}/${total}`;
+
+    // Qty coverage: sum active exit-order qty vs position qty
+    // Only count positions with tracker-managed exits (OCAGENT orders).
+    // Legacy-protected positions (clientId=98) are not in the tracker.
+    let totalPositionQty = 0;
+    let totalStopQty = 0;
+    let totalTpQty = 0;
+    for (const cp of lastClassification.positions) {
+      const exitState = tracker.getExitState(cp.conId);
+      if (!exitState) continue; // legacy or no tracker state — skip qty check
+      const posQty = Math.abs(cp.positionQty);
+      totalPositionQty += posQty;
+      totalStopQty += exitState.stopQty ?? 0;
+      totalTpQty += exitState.tpQty ?? 0;
+    }
+    const stopCoverage = totalPositionQty > 0 ? totalStopQty / totalPositionQty : 1;
+    const tpCoverage = totalPositionQty > 0 ? totalTpQty / totalPositionQty : 1;
+
+    // Escalation: exits_incomplete (state-based)
+    const exitsKey = "watchdog_exits_incomplete";
+    if (exitsIncomplete > 0) {
+      const entry = guardianAlertCache.get(exitsKey);
+      if (!entry) {
+        // First occurrence → WARN
+        await alertManager.sendAlert(exitsKey, "WARN", [
+          `⚠️ *Watchdog: Exit Coverage*`,
+          ``,
+          `${exitsIncomplete} position(s) not fully protected`,
+          `Protected: ${protectedCount}/${total}`,
+          `States: ${JSON.stringify(lastClassification.stateCount)}`,
+        ].join("\n"));
+        guardianAlertCache.set(exitsKey, { state: "exits_incomplete", alertedAt: Date.now() });
+      } else if (Date.now() - entry.alertedAt >= WATCHDOG_EXITS_ESCALATION) {
+        // 15 min unchanged → CRITICAL
+        await alertManager.sendAlert(exitsKey, "CRITICAL", [
+          `🚨 *Watchdog: Exit Coverage — CRITICAL*`,
+          ``,
+          `${exitsIncomplete} position(s) unprotected for >15min`,
+          `Protected: ${protectedCount}/${total}`,
+          `States: ${JSON.stringify(lastClassification.stateCount)}`,
+        ].join("\n"));
+        guardianAlertCache.set(exitsKey, { state: "exits_incomplete", alertedAt: Date.now() });
+      }
+    } else {
+      // All protected — resolve exits_incomplete if active
+      if (guardianAlertCache.has(exitsKey)) {
+        await alertManager.resolve(exitsKey);
+        guardianAlertCache.delete(exitsKey);
+      }
+    }
+
+    // Escalation: qty_undercoverage (qty-based, independent of state)
+    const qtyKey = "watchdog_qty_undercoverage";
+    if (exitsIncomplete === 0 && totalPositionQty > 0 && (stopCoverage < 1 || tpCoverage < 1)) {
+      if (!guardianAlertCache.has(qtyKey)) {
+        await alertManager.sendAlert(qtyKey, "WARN", [
+          `⚠️ *Watchdog: Qty Undercoverage*`,
+          ``,
+          `All positions protected but exit qty < position qty`,
+          `Stop coverage: ${(stopCoverage * 100).toFixed(0)}% (${totalStopQty}/${totalPositionQty})`,
+          `TP coverage: ${(tpCoverage * 100).toFixed(0)}% (${totalTpQty}/${totalPositionQty})`,
+        ].join("\n"));
+        guardianAlertCache.set(qtyKey, { state: "qty_undercoverage", alertedAt: Date.now() });
+      }
+    } else {
+      if (guardianAlertCache.has(qtyKey)) {
+        await alertManager.resolve(qtyKey);
+        guardianAlertCache.delete(qtyKey);
+      }
+    }
+  }
+
   // Track consecutive failures for gateway restart logic
   const hasProblems = !connected || (!universeManager.isScheduleRunning());
   if (!hasProblems) {
@@ -622,7 +727,7 @@ async function watchdogTick(): Promise<void> {
     consecutiveWatchdogFailures = 0;
   }
 
-  console.log(`[watchdog] OK — connected=${connected} scheduler=${universeManager.isScheduleRunning()} market=${marketOpen ? "open" : "closed"}`);
+  console.log(`[watchdog] OK — connected=${connected} scheduler=${universeManager.isScheduleRunning()} market=${marketOpen ? "open" : "closed"} exits=${exitsLabel}`);
 }
 
 // ── Health Check ──
@@ -942,6 +1047,7 @@ app.post("/earnings/refresh", (_req, res) => {
 // ── Classification (E3b) + Guardian (E4) ──
 
 async function runClassificationAndGuardian(snapshot: SyncSnapshot): Promise<void> {
+  classificationCycleCount++;
   const classification = classifyPositions(snapshot, tracker, ibkr.getAccount());
 
   // One-time legacy-own log (deduped by orderId)
@@ -979,7 +1085,7 @@ async function runClassificationAndGuardian(snapshot: SyncSnapshot): Promise<voi
     const actions = await runGuardianCycle(
       classification, snapshot, ibkr, tracker, alertManager,
       GUARDIAN_CONFIG, guardianRetryTracker, guardianSymbolLocks, guardianQuoteCache,
-      guardianAlertCache,
+      guardianAlertCache, classificationCycleCount,
     );
     const actionSummary = actions.filter((a) => a.type !== "noop");
     if (actionSummary.length > 0) {
@@ -1007,6 +1113,7 @@ async function start(): Promise<void> {
   ibkr.on("reconnected", async () => {
     console.log("[trading-agent] IBKR reconnected — running sync barrier");
     consecutiveWatchdogFailures = 0;
+    classificationCycleCount = 0; // E6: reset grace — openOrder stream incomplete after reconnect
     try {
       const snapshot = await ibkr.runSyncBarrier({ isReconnect: true });
       console.log(`[trading-agent] Reconnect sync: ${snapshot.ownOrders.length} own, ${snapshot.foreignOrders.length} foreign`);

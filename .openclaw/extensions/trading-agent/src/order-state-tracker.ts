@@ -131,6 +131,19 @@ export interface ExitState {
   tpOrder?: { orderRef: string; status: string };
   qty: number;
   gen: number;
+  stopQty?: number;
+  tpQty?: number;
+}
+
+export interface TrackerTradeRecord {
+  symbol: string;
+  side: "BUY" | "SELL";
+  quantity: number;
+  price: number;
+  fillPrice?: number;
+  timestamp: string;
+  status: string;
+  tradeIntentId: string;
 }
 
 export interface OpenIntent {
@@ -490,7 +503,7 @@ export class OrderStateTracker {
       qty = stopQty ?? tpQty ?? 0;
     }
 
-    return { stopOrder, tpOrder, qty, gen: maxGen };
+    return { stopOrder, tpOrder, qty, gen: maxGen, stopQty, tpQty };
   }
 
   /**
@@ -574,6 +587,66 @@ export class OrderStateTracker {
       if (ev.type === "order_submitted") return ev as OrderSubmittedEvent;
     }
     return null;
+  }
+
+  /**
+   * Get recent filled trades from the tracker log.
+   * Filters by leg type, symbol, and time window.
+   */
+  getRecentFills(options?: { symbol?: string; sinceDays?: number; leg?: OrderLeg }): TrackerTradeRecord[] {
+    const results: TrackerTradeRecord[] = [];
+    const cutoff = options?.sinceDays
+      ? new Date(Date.now() - options.sinceDays * 24 * 60 * 60 * 1000).toISOString()
+      : undefined;
+
+    for (const refs of this.orderRefsByConId.values()) {
+      for (const ref of refs) {
+        const parsed = parseOrderRef(ref);
+        if (!parsed) continue;
+        if (options?.leg && parsed.leg !== options.leg) continue;
+
+        const submitted = this.getSubmittedEvent(ref);
+        if (!submitted) continue;
+        if (options?.symbol && submitted.symbol !== options.symbol) continue;
+        if (cutoff && submitted.timestamp < cutoff) continue;
+
+        // Check if filled
+        const status = this.latestStatusByRef.get(ref) ?? "unknown";
+        const events = this.eventsByOrderRef.get(ref) ?? [];
+
+        // Find fill price from status_changed events
+        let fillPrice: number | undefined;
+        for (const ev of events) {
+          if (ev.type === "order_status_changed") {
+            const sc = ev as OrderStatusChangedEvent;
+            if (sc.avgFillPrice > 0) fillPrice = sc.avgFillPrice;
+          }
+          if (ev.type === "order_filled") {
+            const fe = ev as OrderFilledEvent;
+            if (fe.avgPrice > 0) fillPrice = fe.avgPrice;
+          }
+        }
+
+        // Only include if at least partially filled
+        const cumQty = this.fillCumQtyByRef.get(ref);
+        if (!fillPrice && (!cumQty || cumQty <= 0) && status !== "Filled") continue;
+
+        results.push({
+          symbol: submitted.symbol,
+          side: submitted.action,
+          quantity: submitted.quantity,
+          price: submitted.limitPrice ?? submitted.auxPrice ?? 0,
+          fillPrice,
+          timestamp: submitted.timestamp,
+          status,
+          tradeIntentId: parsed.tradeIntentId,
+        });
+      }
+    }
+
+    // Sort by timestamp descending
+    results.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    return results;
   }
 
   get tradingLocked(): boolean {

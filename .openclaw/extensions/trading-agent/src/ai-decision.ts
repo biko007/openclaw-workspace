@@ -7,6 +7,7 @@ import {
   type DecisionRecord,
   type ScanResult,
 } from "./store.js";
+import type { OrderStateTracker } from "./order-state-tracker.js";
 
 // ── API Key ──
 
@@ -74,16 +75,35 @@ export async function evaluateTrade(
   currentPrice: number,
   sectorPerformance?: string,
   earningsInfo?: string,
+  tracker?: OrderStateTracker,
 ): Promise<TradeDecision> {
-  // Build context from trade history for this symbol
-  const recentOrders = loadOrders()
+  // Build context from trade history for this symbol (legacy + tracker)
+  const legacyOrders = loadOrders()
     .filter((o) => o.symbol === candidate.symbol)
+    .slice(-5)
+    .map((o) => ({
+      line: `${o.side} ${o.quantity} @ $${o.price.toFixed(2)} (${o.status}, ${o.timestamp.slice(0, 10)})`,
+      ts: o.timestamp,
+    }));
+
+  const trackerOrders = tracker
+    ? tracker.getRecentFills({ symbol: candidate.symbol, leg: "entry" })
+        .slice(0, 5)
+        .map((t) => ({
+          line: `${t.side} ${t.quantity} @ $${(t.fillPrice ?? t.price).toFixed(2)} (${t.status}, ${t.timestamp.slice(0, 10)})`,
+          ts: t.timestamp,
+        }))
+    : [];
+
+  // Merge, dedup by timestamp, take last 5
+  const seen = new Set<string>();
+  const merged = [...legacyOrders, ...trackerOrders]
+    .filter((e) => { if (seen.has(e.ts)) return false; seen.add(e.ts); return true; })
+    .sort((a, b) => a.ts.localeCompare(b.ts))
     .slice(-5);
 
-  const tradeHistory = recentOrders.length > 0
-    ? recentOrders.map((o) =>
-        `${o.side} ${o.quantity} @ $${o.price.toFixed(2)} (${o.status}, ${o.timestamp.slice(0, 10)})`
-      ).join("\n")
+  const tradeHistory = merged.length > 0
+    ? merged.map((e) => e.line).join("\n")
     : "Keine bisherigen Trades für dieses Symbol.";
 
   // Build recent AI decisions for context

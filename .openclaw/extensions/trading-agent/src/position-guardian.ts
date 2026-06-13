@@ -395,6 +395,7 @@ export async function runGuardianCycle(
   symbolLocks: Map<string, Promise<void>>,
   _quoteCache: Map<number, QuoteSnapshot>,
   guardianAlertCache: GuardianAlertCache,
+  classificationCycleCount: number,
 ): Promise<GuardianAction[]> {
   // Belt + suspenders: caller also gates, but double-check
   if (ibkr.guardianLocked || ibkr.syncInProgress || tracker.tradingLocked) {
@@ -410,26 +411,38 @@ export async function runGuardianCycle(
     legacyConIds.add(lo.conId);
   }
 
+  // First-cycle grace: after startup or reconnect, the openOrder stream may be
+  // incomplete → positions can be misclassified as unreconstructable on cycle 1.
+  // Suppress all Telegram alerts on the first cycle to avoid false CRITICALs.
+  const alertsEnabled = classificationCycleCount > 1;
+  if (!alertsEnabled) {
+    console.log(`[guardian] Grace period (cycle ${classificationCycleCount}), alerts suppressed`);
+  }
+
   for (const cp of classification.positions) {
     // 1. Protected → noop + all-clear if previously alerted
     if (cp.state === "protected") {
-      await resolveGuardianAlerts(cp.symbol, guardianAlertCache, alertManager);
+      if (alertsEnabled) {
+        await resolveGuardianAlerts(cp.symbol, guardianAlertCache, alertManager);
+      }
       actions.push({ type: "noop", symbol: cp.symbol, reason: "protected" });
       continue;
     }
 
     // 2. Legacy-involved + not protected → CRITICAL alert only (I2), throttled per (symbol, state)
     if (legacyConIds.has(cp.conId)) {
-      const alertKey = `guardian_legacy_${cp.symbol}`;
-      if (shouldGuardianAlert(alertKey, cp.state, guardianAlertCache)) {
-        await alertManager.sendAlert(
-          alertKey,
-          "CRITICAL",
-          `\u26a0\ufe0f *Guardian*: ${cp.symbol} state=${cp.state} \u2014 legacy orders involved, no auto-action (I2). ${cp.details}`,
-        );
-        markGuardianAlerted(alertKey, cp.state, guardianAlertCache);
-      } else {
-        console.log(`[guardian] Alert throttled: ${alertKey} state=${cp.state}`);
+      if (alertsEnabled) {
+        const alertKey = `guardian_legacy_${cp.symbol}`;
+        if (shouldGuardianAlert(alertKey, cp.state, guardianAlertCache)) {
+          await alertManager.sendAlert(
+            alertKey,
+            "CRITICAL",
+            `\u26a0\ufe0f *Guardian*: ${cp.symbol} state=${cp.state} \u2014 legacy orders involved, no auto-action (I2). ${cp.details}`,
+          );
+          markGuardianAlerted(alertKey, cp.state, guardianAlertCache);
+        } else {
+          console.log(`[guardian] Alert throttled: ${alertKey} state=${cp.state}`);
+        }
       }
       actions.push({ type: "alert_only", symbol: cp.symbol, reason: `legacy-involved: ${cp.state}` });
       continue;
@@ -437,27 +450,31 @@ export async function runGuardianCycle(
 
     // 3. foreign_involved → WARN alert, no action
     if (cp.state === "foreign_involved") {
-      await alertManager.sendAlert(
-        `guardian_foreign_${cp.symbol}`,
-        "WARN",
-        `\u26a0\ufe0f *Guardian*: ${cp.symbol} has non-legacy foreign orders \u2014 no auto-action.`,
-      );
+      if (alertsEnabled) {
+        await alertManager.sendAlert(
+          `guardian_foreign_${cp.symbol}`,
+          "WARN",
+          `\u26a0\ufe0f *Guardian*: ${cp.symbol} has non-legacy foreign orders \u2014 no auto-action.`,
+        );
+      }
       actions.push({ type: "alert_only", symbol: cp.symbol, reason: "foreign_involved" });
       continue;
     }
 
     // 4. unreconstructable → CRITICAL, no placement, throttled per (symbol, state)
     if (cp.state === "unreconstructable") {
-      const alertKey = `guardian_unrecon_${cp.symbol}`;
-      if (shouldGuardianAlert(alertKey, cp.state, guardianAlertCache)) {
-        await alertManager.sendAlert(
-          alertKey,
-          "CRITICAL",
-          `\ud83d\udea8 *Guardian*: ${cp.symbol} unreconstructable \u2014 no exit orders, no intent, no legacy.`,
-        );
-        markGuardianAlerted(alertKey, cp.state, guardianAlertCache);
-      } else {
-        console.log(`[guardian] Alert throttled: ${alertKey} state=${cp.state}`);
+      if (alertsEnabled) {
+        const alertKey = `guardian_unrecon_${cp.symbol}`;
+        if (shouldGuardianAlert(alertKey, cp.state, guardianAlertCache)) {
+          await alertManager.sendAlert(
+            alertKey,
+            "CRITICAL",
+            `\ud83d\udea8 *Guardian*: ${cp.symbol} unreconstructable \u2014 no exit orders, no intent, no legacy.`,
+          );
+          markGuardianAlerted(alertKey, cp.state, guardianAlertCache);
+        } else {
+          console.log(`[guardian] Alert throttled: ${alertKey} state=${cp.state}`);
+        }
       }
       actions.push({ type: "alert_only", symbol: cp.symbol, reason: "unreconstructable" });
       continue;

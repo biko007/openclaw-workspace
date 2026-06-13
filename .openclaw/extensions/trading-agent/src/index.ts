@@ -29,6 +29,7 @@ import {
 } from "./earnings-calendar.js";
 import { isMarketOpen, marketStatusLabel } from "./market-hours.js";
 import { AlertManager } from "./alert-manager.js";
+import { checkExitCoverage } from "./watchdog-metrics.js";
 import {
   loadStatus,
   saveStatus,
@@ -642,80 +643,14 @@ async function watchdogTick(): Promise<void> {
   // Skip on first cycle — classification may be based on incomplete openOrder stream
   let exitsLabel = "?/?";
   if (lastClassification && classificationCycleCount > 1) {
-    const total = lastClassification.positions.length;
-    const protectedCount = lastClassification.stateCount["protected"] ?? 0;
-    const exitsIncomplete = total - protectedCount;
-    exitsLabel = `${protectedCount}/${total}`;
-
-    // Qty coverage: sum active exit-order qty vs position qty
-    // Only count positions with tracker-managed exits (OCAGENT orders).
-    // Legacy-protected positions (clientId=98) are not in the tracker.
-    let totalPositionQty = 0;
-    let totalStopQty = 0;
-    let totalTpQty = 0;
-    for (const cp of lastClassification.positions) {
-      const exitState = tracker.getExitState(cp.conId);
-      if (!exitState) continue; // legacy or no tracker state — skip qty check
-      const posQty = Math.abs(cp.positionQty);
-      totalPositionQty += posQty;
-      totalStopQty += exitState.stopQty ?? 0;
-      totalTpQty += exitState.tpQty ?? 0;
-    }
-    const stopCoverage = totalPositionQty > 0 ? totalStopQty / totalPositionQty : 1;
-    const tpCoverage = totalPositionQty > 0 ? totalTpQty / totalPositionQty : 1;
-
-    // Escalation: exits_incomplete (state-based)
-    const exitsKey = "watchdog_exits_incomplete";
-    if (exitsIncomplete > 0) {
-      const entry = guardianAlertCache.get(exitsKey);
-      if (!entry) {
-        // First occurrence → WARN
-        await alertManager.sendAlert(exitsKey, "WARN", [
-          `⚠️ *Watchdog: Exit Coverage*`,
-          ``,
-          `${exitsIncomplete} position(s) not fully protected`,
-          `Protected: ${protectedCount}/${total}`,
-          `States: ${JSON.stringify(lastClassification.stateCount)}`,
-        ].join("\n"));
-        guardianAlertCache.set(exitsKey, { state: "exits_incomplete", alertedAt: Date.now() });
-      } else if (Date.now() - entry.alertedAt >= WATCHDOG_EXITS_ESCALATION) {
-        // 15 min unchanged → CRITICAL
-        await alertManager.sendAlert(exitsKey, "CRITICAL", [
-          `🚨 *Watchdog: Exit Coverage — CRITICAL*`,
-          ``,
-          `${exitsIncomplete} position(s) unprotected for >15min`,
-          `Protected: ${protectedCount}/${total}`,
-          `States: ${JSON.stringify(lastClassification.stateCount)}`,
-        ].join("\n"));
-        guardianAlertCache.set(exitsKey, { state: "exits_incomplete", alertedAt: Date.now() });
-      }
-    } else {
-      // All protected — resolve exits_incomplete if active
-      if (guardianAlertCache.has(exitsKey)) {
-        await alertManager.resolve(exitsKey);
-        guardianAlertCache.delete(exitsKey);
-      }
-    }
-
-    // Escalation: qty_undercoverage (qty-based, independent of state)
-    const qtyKey = "watchdog_qty_undercoverage";
-    if (exitsIncomplete === 0 && totalPositionQty > 0 && (stopCoverage < 1 || tpCoverage < 1)) {
-      if (!guardianAlertCache.has(qtyKey)) {
-        await alertManager.sendAlert(qtyKey, "WARN", [
-          `⚠️ *Watchdog: Qty Undercoverage*`,
-          ``,
-          `All positions protected but exit qty < position qty`,
-          `Stop coverage: ${(stopCoverage * 100).toFixed(0)}% (${totalStopQty}/${totalPositionQty})`,
-          `TP coverage: ${(tpCoverage * 100).toFixed(0)}% (${totalTpQty}/${totalPositionQty})`,
-        ].join("\n"));
-        guardianAlertCache.set(qtyKey, { state: "qty_undercoverage", alertedAt: Date.now() });
-      }
-    } else {
-      if (guardianAlertCache.has(qtyKey)) {
-        await alertManager.resolve(qtyKey);
-        guardianAlertCache.delete(qtyKey);
-      }
-    }
+    const coverage = await checkExitCoverage(
+      lastClassification,
+      (conId) => tracker.getExitState(conId),
+      alertManager,
+      guardianAlertCache,
+      WATCHDOG_EXITS_ESCALATION,
+    );
+    exitsLabel = coverage.exitsLabel;
   }
 
   // Track consecutive failures for gateway restart logic

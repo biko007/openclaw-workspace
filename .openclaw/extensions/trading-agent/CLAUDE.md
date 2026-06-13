@@ -11,3 +11,61 @@
 - Auch die Abschluss-Zusammenfassung einer Etappe gehoert in die Report-Datei, NICHT ins Terminal.
   Terminal-Output nach Task-Ende ist ausschliesslich die Zeile `DONE → <Pfad>`.
   Keine Tabellen, keine Summaries im Terminal.
+
+---
+
+## Order-Identität
+
+- **orderRef-Schema:** `OCAGENT|account|tradeIntentId|conId|leg|gen`
+- **Legs:** `entry`, `stop`, `tp`, `fbclose`
+- **gen:** 0 = initial placement, +1 bei jeder Guardian-Nachrüstung (replacement)
+- **OCA-Group:** `OCA|tradeIntentId|gen` — verbindet Stop + TP einer Generation
+- **tradeIntentId:** `SYMBOL-YYMMDD-NN` (NN = laufende Nummer pro Tag)
+
+## Durable Event Log
+
+- **Datei:** `orders-v2.jsonl` (append-only, fsync nach jedem Write)
+- **Event-Typen:** `order_submitted`, `order_status_changed`, `order_filled`, `order_cancelled`, `order_error`, `replacement_intent_started`, `replacement_intent_confirmed`, `replacement_intent_abandoned`, `fallback_intent_started`, `fallback_intent_confirmed`, `fallback_intent_abandoned`
+- **Rebuild beim Start:** Quarantine bei 1 korrupten Zeile (Zeile übersprungen, Warnung), `tradingLocked` bei 2+ korrupten Zeilen (Agent blockiert, CRITICAL-Alert)
+- **ExecId-Correction:** gleiche `execIdBase`, höherer Suffix ersetzt älteren Fill-Event (IBKR sendet korrekturen)
+
+## Guardian-Zustände
+
+| Zustand | Aktion |
+|---------|--------|
+| `protected` | Nichts — vollständig gedeckt |
+| `missing_stop` | Nachrüstung: STP + TP neu platzieren (gen+1) |
+| `missing_tp` | Nachrüstung: STP + TP neu platzieren (gen+1) |
+| `missing_both` | Nachrüstung: STP + TP neu platzieren (gen+1) |
+| `qty_mismatch` | Nachrüstung: alte Orders canceln, neue mit korrekter Qty (gen+1) |
+| `oca_broken` | Nachrüstung: alte Orders canceln, neue mit gleicher OCA (gen+1) |
+| `unreconstructable` | `alert_only` — keine Exit-Orders, kein Intent, kein Legacy. CRITICAL-Alert |
+| `foreign_involved` | `alert_only` — Fremd-Orders beteiligt, manuell prüfen. WARN-Alert |
+
+- **Retry-Budget:** max 2 fehlgeschlagene Nachrüstungen pro Stunde pro Symbol
+- **fallbackMode:**
+  - `market_close` — MKT SELL wenn Preis ≤ Stop und keine aktive STP-Order
+  - `alert_only` — nur CRITICAL-Alert via Telegram, kein automatischer Close
+
+## Legacy-Übergangsregel
+
+- **clientId 1 oder 98** = Legacy (TWS oder alter Agent)
+- **Regel:** read-only — kein Cancel, kein Placement, nur Alert
+- Entfällt wenn alle Legacy-Positionen (BMY, GILD, SO, DUK, IFX, DTE, P911, COP) geschlossen sind
+
+## First-Cycle-Grace
+
+- `classificationCycleCount` = 0 bei Start und Reconnect
+- **Cycle 1:** keine Telegram-Alerts (Klassifizierung basiert auf unvollständigem openOrder-Stream)
+- Guardian-Aktionen laufen normal, nur Alert-Versand an Telegram unterdrückt
+
+## Watchdog-Metriken
+
+| Check | Beschreibung |
+|-------|-------------|
+| 1 — IBKR-Verbindung | 3 aufeinanderfolgende Failures → automatischer Gateway-Restart (`systemctl --user restart openclaw-ibkr-gateway`) |
+| 2 — Scan-Staleness | >10min seit letztem Scan-Ergebnis, mit 20min Grace nach Market-Open |
+| 3 — Scheduler-Status | WARN wenn Universe-Scheduler gestoppt |
+| 4 — Exit-Coverage | `exits_incomplete`: WARN → CRITICAL nach 15min. `qty_undercoverage`: WARN wenn coverage < 100% |
+
+- **OK-Zeile:** `exits=N/N` (N protected / N total) oder `exits=?/?` bei First-Cycle-Grace

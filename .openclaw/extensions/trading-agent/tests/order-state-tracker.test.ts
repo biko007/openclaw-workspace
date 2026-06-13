@@ -840,6 +840,56 @@ describe("OrderIdSequencer", () => {
   });
 });
 
+// ─── Group 8b: Crash Recovery (1 Test) ───────────────────────────────────────
+
+describe("Crash Recovery", () => {
+  it("43. open intent survives rebuild after simulated crash", () => {
+    const log = new DurableEventLog(logPath());
+    const conId = 265598;
+    const stopRef = buildOrderRef({
+      account: "DUP514636",
+      tradeIntentId: "AAPL-260611-01",
+      conId,
+      leg: "stop",
+      gen: 1,
+    });
+
+    // Simulate: order_submitted was persisted...
+    log.appendEvent(makeSubmitted({
+      orderRef: buildOrderRef({ account: "DUP514636", tradeIntentId: "AAPL-260611-01", conId, leg: "stop", gen: 0 }),
+      conId,
+      action: "SELL",
+      orderType: "STP",
+    }));
+
+    // ...then replacement_intent_started was persisted...
+    const intentEv: IntentEvent = {
+      type: "replacement_intent_started",
+      timestamp: new Date().toISOString(),
+      orderRef: stopRef,
+      targetOrderRef: buildOrderRef({ account: "DUP514636", tradeIntentId: "AAPL-260611-01", conId, leg: "stop", gen: 0 }),
+      reason: "missing_tp",
+      newGen: 1,
+    };
+    log.appendEvent(intentEv);
+
+    // ...then CRASH — no replacement_intent_confirmed written
+
+    // Fresh tracker from same log file (simulates process restart)
+    const log2 = new DurableEventLog(logPath());
+    const tracker2 = new OrderStateTracker(log2);
+    const result = tracker2.rebuild();
+
+    // Open intent must survive rebuild
+    expect(result.openIntents).toHaveLength(1);
+    expect(result.openIntents[0].orderRef).toBe(stopRef);
+    expect(result.openIntents[0].type).toBe("replacement_intent_started");
+
+    // Single quarantined line (not 2+) → tradingLocked must be false
+    expect(result.tradingLocked).toBe(false);
+  });
+});
+
 // ─── Group 9: order_error (3 Tests) ──────────────────────────────────────────
 
 describe("order_error", () => {

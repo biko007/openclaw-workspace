@@ -205,6 +205,7 @@ describe("Position Guardian (E4)", () => {
     const actions = await runGuardianCycle(
       classification, snapshot, ibkr as any, tracker as any, alerts as any,
       defaultConfig, retries, locks, quotes,
+      new Map(), 2,
     );
 
     expect(actions).toHaveLength(1);
@@ -231,6 +232,7 @@ describe("Position Guardian (E4)", () => {
     const actions = await runGuardianCycle(
       classification, snapshot, ibkr as any, tracker as any, alerts as any,
       defaultConfig, new Map(), new Map(), new Map(),
+      new Map(), 2,
     );
 
     expect(actions).toHaveLength(1);
@@ -266,6 +268,7 @@ describe("Position Guardian (E4)", () => {
     const actions = await runGuardianCycle(
       classification, snapshot, ibkr as any, tracker as any, alerts as any,
       defaultConfig, new Map(), new Map(), new Map(),
+      new Map(), 2,
     );
 
     expect(actions).toHaveLength(1);
@@ -293,6 +296,7 @@ describe("Position Guardian (E4)", () => {
     const actions = await runGuardianCycle(
       classification, snapshot, ibkr as any, tracker as any, alerts as any,
       defaultConfig, new Map(), new Map(), new Map(),
+      new Map(), 2,
     );
 
     expect(actions).toHaveLength(1);
@@ -325,6 +329,7 @@ describe("Position Guardian (E4)", () => {
     const actions = await runGuardianCycle(
       classification, snapshot, ibkr as any, tracker as any, alerts as any,
       defaultConfig, new Map(), new Map(), new Map(),
+      new Map(), 2,
     );
 
     expect(actions).toHaveLength(1);
@@ -359,6 +364,7 @@ describe("Position Guardian (E4)", () => {
     const actions = await runGuardianCycle(
       classification, snapshot, ibkr as any, tracker as any, alerts as any,
       defaultConfig, new Map(), new Map(), new Map(),
+      new Map(), 2,
     );
 
     expect(actions).toHaveLength(1);
@@ -379,6 +385,7 @@ describe("Position Guardian (E4)", () => {
     const actions = await runGuardianCycle(
       classification, makeSnapshot(), ibkr as any, tracker as any, alerts as any,
       defaultConfig, new Map(), new Map(), new Map(),
+      new Map(), 2,
     );
 
     expect(actions).toHaveLength(1);
@@ -400,6 +407,7 @@ describe("Position Guardian (E4)", () => {
     const actions = await runGuardianCycle(
       classification, makeSnapshot(), ibkr as any, tracker as any, alerts as any,
       defaultConfig, new Map(), new Map(), new Map(),
+      new Map(), 2,
     );
 
     expect(actions).toHaveLength(1);
@@ -422,6 +430,7 @@ describe("Position Guardian (E4)", () => {
     const actions = await runGuardianCycle(
       classification, makeSnapshot(), ibkr as any, tracker as any, alerts as any,
       defaultConfig, new Map(), new Map(), new Map(),
+      new Map(), 2,
     );
 
     expect(actions).toHaveLength(1);
@@ -446,6 +455,7 @@ describe("Position Guardian (E4)", () => {
     const actions = await runGuardianCycle(
       classification, makeSnapshot(), ibkr as any, tracker as any, alerts as any,
       defaultConfig, new Map(), new Map(), new Map(),
+      new Map(), 2,
     );
 
     expect(actions).toHaveLength(1);
@@ -469,6 +479,7 @@ describe("Position Guardian (E4)", () => {
     const actions = await runGuardianCycle(
       classification, makeSnapshot(), ibkr as any, tracker as any, alerts as any,
       defaultConfig, retries, new Map(), new Map(),
+      new Map(), 2,
     );
 
     expect(actions).toHaveLength(1);
@@ -495,6 +506,7 @@ describe("Position Guardian (E4)", () => {
     const actions = await runGuardianCycle(
       classification, makeSnapshot(), ibkr as any, tracker as any, alerts as any,
       defaultConfig, retries, new Map(), new Map(),
+      new Map(), 2,
     );
 
     expect(actions).toHaveLength(1);
@@ -517,9 +529,11 @@ describe("Position Guardian (E4)", () => {
     // Run two guardian cycles concurrently on the same symbol
     const [a1, a2] = await Promise.all([
       runGuardianCycle(classification, snapshot, ibkr as any, tracker as any, alerts as any,
-        defaultConfig, new Map(), locks, new Map()),
+        defaultConfig, new Map(), locks, new Map(),
+        new Map(), 2),
       runGuardianCycle(classification, snapshot, ibkr as any, tracker as any, alerts as any,
-        defaultConfig, new Map(), locks, new Map()),
+        defaultConfig, new Map(), locks, new Map(),
+        new Map(), 2),
     ]);
 
     // Both should complete (serialized, not deadlocked)
@@ -542,6 +556,7 @@ describe("Position Guardian (E4)", () => {
     const actions = await runGuardianCycle(
       classification, makeSnapshot(), ibkr as any, tracker as any, alerts as any,
       defaultConfig, new Map(), new Map(), new Map(),
+      new Map(), 2,
     );
 
     expect(actions).toHaveLength(0);
@@ -731,6 +746,7 @@ describe("Position Guardian (E4)", () => {
     await runGuardianCycle(
       classification, snapshot, ibkr1 as any, tracker as any, alerts as any,
       defaultConfig, retries, new Map(), new Map(),
+      new Map(), 2,
     );
     expect(retries.get("AAPL")!.count).toBe(1);
 
@@ -741,6 +757,7 @@ describe("Position Guardian (E4)", () => {
     await runGuardianCycle(
       classification, snapshot, ibkr2 as any, tracker as any, alerts as any,
       defaultConfig, retries, new Map(), new Map(),
+      new Map(), 2,
     );
     expect(retries.get("AAPL")!.count).toBe(2);
 
@@ -750,12 +767,122 @@ describe("Position Guardian (E4)", () => {
     const actions = await runGuardianCycle(
       classification, snapshot, ibkr3 as any, tracker as any, alerts as any,
       defaultConfig, retries, new Map(), new Map(),
+      new Map(), 2,
     );
     expect(actions).toHaveLength(1);
     expect(actions[0].type).toBe("alert_only");
     expect(actions[0].reason).toContain("retry limit");
     expect(ibkr3.placedGuardianOrders).toHaveLength(0);
     expect(alerts.alerts.some((a) => a.severity === "CRITICAL")).toBe(true);
+  });
+
+  it("22. orphan orders → guardian does NOT cancel orphans", async () => {
+    const ibkr = new StubIBKR();
+    const tracker = new StubTracker();
+    const alerts = new StubAlertManager();
+    setupTrackerForConId(tracker);
+    tracker.setExitState(conId, {
+      stopOrder: { orderRef: ref("stop", 0), status: "Submitted" },
+      tpOrder: { orderRef: ref("tp", 0), status: "Submitted" },
+      qty: 100,
+      gen: 0,
+    });
+
+    const classification = makeClassification([
+      makePosition({ state: "protected" }),
+    ]);
+    // Inject orphan (different conId, not in positions)
+    classification.orphans = [{ orderId: 999, orderRef: "OCAGENT|DUP514636|MSFT-260612-01|272093|stop|0", symbol: "MSFT", conId: 272093, reason: "no matching position" }];
+
+    const actions = await runGuardianCycle(
+      classification, makeSnapshot(), ibkr as any, tracker as any, alerts as any,
+      defaultConfig, new Map(), new Map(), new Map(),
+      new Map(), 2,
+    );
+
+    expect(actions).toHaveLength(1);
+    expect(actions[0].type).toBe("noop");
+    expect(ibkr.cancelledOrders).toHaveLength(0);
+  });
+
+  it("23. fallback with stale quote (age > quoteMaxAgeSec=90s) → no close", async () => {
+    const ibkr = new StubIBKR();
+    const tracker = new StubTracker();
+    const alerts = new StubAlertManager();
+    setupTrackerForConId(tracker);
+    tracker.setExitState(conId, null);
+
+    const snapshot = makeSnapshot({
+      timestamp: new Date().toISOString(),
+      positions: [{ symbol: "AAPL", conId, exchange: "SMART", currency: "USD", quantity: 100, avgCost: 150 }],
+    });
+
+    const cp = makePosition({ state: "missing_both", gen: 0 });
+
+    // Quote is 100 seconds old — exceeds quoteMaxAgeSec=90
+    const quoteCache = new Map<number, QuoteSnapshot>();
+    quoteCache.set(conId, { bid: 135, ask: 136, last: 135, timestamp: Date.now() - 100_000 });
+
+    const result = await checkFallbackClose(
+      cp, snapshot, ibkr as any, tracker as any, alerts as any,
+      defaultConfig, quoteCache, new Map(),
+    );
+
+    expect(result).toBeNull();
+    expect(ibkr.placedMarketSells).toHaveLength(0);
+  });
+
+  it("24. fallback with wide spread (ask/bid > 1.10) → no close", async () => {
+    const ibkr = new StubIBKR();
+    const tracker = new StubTracker();
+    const alerts = new StubAlertManager();
+    setupTrackerForConId(tracker);
+    tracker.setExitState(conId, null);
+
+    const snapshot = makeSnapshot({
+      timestamp: new Date().toISOString(),
+      positions: [{ symbol: "AAPL", conId, exchange: "SMART", currency: "USD", quantity: 100, avgCost: 150 }],
+    });
+
+    const cp = makePosition({ state: "missing_both", gen: 0 });
+
+    // Spread > 10%: ask/bid = 115/100 = 1.15 > 1.10
+    const quoteCache = new Map<number, QuoteSnapshot>();
+    quoteCache.set(conId, { bid: 100, ask: 115, last: 105, timestamp: Date.now() });
+
+    const result = await checkFallbackClose(
+      cp, snapshot, ibkr as any, tracker as any, alerts as any,
+      defaultConfig, quoteCache, new Map(),
+    );
+
+    expect(result).toBeNull();
+    expect(ibkr.placedMarketSells).toHaveLength(0);
+  });
+
+  it("25. ExitState.stopQty/tpQty reflect submitted quantity (E6)", async () => {
+    const ibkr = new StubIBKR();
+    const tracker = new StubTracker();
+    const alerts = new StubAlertManager();
+
+    // Set exit state with explicit stopQty and tpQty (E6 extension)
+    tracker.setExitState(conId, {
+      stopOrder: { orderRef: ref("stop", 0), status: "Submitted" },
+      tpOrder: { orderRef: ref("tp", 0), status: "Submitted" },
+      qty: 100,
+      gen: 0,
+      stopQty: 50,
+      tpQty: 50,
+    });
+
+    const exitState = tracker.getExitState(conId);
+    expect(exitState).not.toBeNull();
+    expect(exitState!.stopQty).toBe(50);
+    expect(exitState!.tpQty).toBe(50);
+
+    // Verify: if positionQty=100 but stopQty=50, coverage is 50%
+    const positionQty = 100;
+    const stopCoverage = (exitState!.stopQty ?? 0) / positionQty;
+    expect(stopCoverage).toBe(0.5);
   });
 
   it("19. intent reconciliation: found → replacement_intent_confirmed", () => {

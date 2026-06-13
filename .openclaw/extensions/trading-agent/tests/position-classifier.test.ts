@@ -364,6 +364,29 @@ describe("Position Classifier (E3b)", () => {
     expect(result.orphans[0].symbol).toBe("MSFT");
   });
 
+  it("15. Partial exit fill → position qty reduced, exit qty unchanged → qty_mismatch", () => {
+    const tracker = new StubTracker();
+    // Position reduced to 50 by partial stop fill, but exit orders retain original qty=100
+    tracker.setExitState(265598, {
+      stopOrder: { orderRef: stopRef, status: "Submitted" },
+      tpOrder: { orderRef: tpRef, status: "Submitted" },
+      qty: 100, // Tracker-reported exit qty (unchanged from original submission)
+      gen: 0,
+    });
+
+    const snapshot = makeSnapshot({
+      positions: [makePosition({ quantity: 50 })], // Reduced by partial stop fill
+      ownOrders: [
+        makeOrder({ orderId: 10, orderRef: stopRef, orderType: "STP", totalQuantity: 100, ocaGroup }),
+        makeOrder({ orderId: 11, orderRef: tpRef, orderType: "LMT", totalQuantity: 100, ocaGroup }),
+      ],
+    });
+
+    const result = classifyPositions(snapshot, tracker as any, ACCOUNT);
+    expect(result.positions).toHaveLength(1);
+    expect(result.positions[0].state).toBe("qty_mismatch");
+  });
+
   it("14. short position → CRITICAL, skipped from classification", () => {
     const tracker = new StubTracker();
 

@@ -285,6 +285,29 @@ describe("IBKR Permanent Listeners", () => {
     ibkr.disconnect();
   });
 
+  it("9. permId=0 in orderStatus → tracker receives event via orderRef (orderId mapping)", async () => {
+    const ibkr = new IBKRConnection();
+    const tracker = makeTracker();
+    ibkr.setTracker(tracker);
+
+    await ibkr.connect();
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Register orderId 42 → known orderRef
+    ibkr.registerOrderRef(42, TEST_ORDER_REF);
+
+    const api = getApiInstance(ibkr);
+    // Emit orderStatus with permId=0 (IBKR gateway restart artifact)
+    api.emit("orderStatus", 42, "PreSubmitted", 0, 10, 0, 0, undefined, undefined);
+
+    // Tracker should route via orderId→orderRef mapping, not permId
+    const events = tracker.getEventsForOrder(TEST_ORDER_REF);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("order_status_changed");
+
+    ibkr.disconnect();
+  });
+
   it("8. Order error (id>0) with known orderRef -> order_error in tracker", async () => {
     const ibkr = new IBKRConnection();
     const tracker = makeTracker();

@@ -211,12 +211,11 @@ export class OrderExecutor {
     }
 
     // Round to valid tick size per exchange rules
-    // XETRA tick sizes: <10€ = 0.001, <50€ = 0.005, <100€ = 0.01, <500€ = 0.05, ≥500€ = 0.1
+    // XETRA: IBKR rejects sub-cent ticks (DTE errorCode 110 at 27.325 with tick 0.005,
+    // empirisch bestätigt 2026-06-12 Nachrüstung). Minimum 0.01 for all prices <100€.
     // US stocks: 0.01 for all
     const getTickSize = (price: number): number => {
       if (!isEU) return 0.01;
-      if (price < 10) return 0.001;
-      if (price < 50) return 0.005;
       if (price < 100) return 0.01;
       if (price < 500) return 0.05;
       return 0.1;

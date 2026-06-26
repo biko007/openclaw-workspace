@@ -18,6 +18,7 @@ interface AlertState {
   suppressedCount: number;  // how many times suppressed since last send
   active: boolean;          // currently in alert state
   lastMessage: string;
+  sentDuringCurrentActivation: boolean; // R4a: true if Telegram was sent since last resolve
 }
 
 const DEDUP_WINDOW = 60 * 60 * 1000; // 60 minutes
@@ -40,7 +41,7 @@ export class AlertManager {
     let entry = this.state.get(key);
 
     if (!entry) {
-      entry = { key, severity, lastSentAt: 0, suppressedCount: 0, active: false, lastMessage: "" };
+      entry = { key, severity, lastSentAt: 0, suppressedCount: 0, active: false, lastMessage: "", sentDuringCurrentActivation: false };
       this.state.set(key, entry);
     }
 
@@ -63,6 +64,7 @@ export class AlertManager {
       await this.sendTelegram(message + suffix);
       entry.lastSentAt = now;
       entry.suppressedCount = 0;
+      entry.sentDuringCurrentActivation = true;
       return true;
     }
 
@@ -82,11 +84,13 @@ export class AlertManager {
     await this.sendTelegram(message + suffix);
     entry.lastSentAt = now;
     entry.suppressedCount = 0;
+    entry.sentDuringCurrentActivation = true;
     return true;
   }
 
   /**
-   * Mark an alert as resolved. Sends a recovery message if it was previously active.
+   * Mark an alert as resolved. Sends a recovery message only if a Telegram
+   * message was actually sent during this activation (R4a).
    */
   async resolve(key: string): Promise<void> {
     const entry = this.state.get(key);
@@ -95,9 +99,11 @@ export class AlertManager {
     entry.active = false;
     const suppressed = entry.suppressedCount;
     entry.suppressedCount = 0;
+    const wasSent = entry.sentDuringCurrentActivation;
+    entry.sentDuringCurrentActivation = false;
 
-    // Only send recovery for WARN/CRITICAL that actually sent a Telegram message
-    if (entry.lastSentAt > 0 && entry.severity !== "INFO") {
+    // Only send recovery if Telegram was actually pushed during this activation
+    if (wasSent && entry.severity !== "INFO") {
       const suffix = suppressed > 0 ? ` (${suppressed}x unterdrückt)` : "";
       const msg = `✅ *Alert behoben:* ${key}${suffix}`;
       console.log(`[alert] RESOLVED ${key}`);

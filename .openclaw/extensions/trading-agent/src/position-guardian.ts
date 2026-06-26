@@ -25,6 +25,7 @@ export interface GuardianConfig {
 export interface GuardianAlertEntry {
   state: string;
   alertedAt: number;
+  firstSeenAt?: number; // R4b: timestamp of first observation for grace window
 }
 
 export type GuardianAlertCache = Map<string, GuardianAlertEntry>;

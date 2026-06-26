@@ -107,7 +107,8 @@ const eventLog = new DurableEventLog(EVENT_LOG_PATH);
 const tracker = new OrderStateTracker(eventLog);
 
 const universeManager = new UniverseManager(ibkr);
-const executor = new OrderExecutor(ibkr, () => currentStatus, sendTelegramNotification, tracker);
+const alertManager = new AlertManager(sendTelegramNotification);
+const executor = new OrderExecutor(ibkr, () => currentStatus, sendTelegramNotification, tracker, alertManager);
 let currentStatus: TradingStatus = loadStatus();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let previousPositionSymbols = new Map<string, Position>(); // track for close detection
@@ -115,6 +116,7 @@ let lastReportDay = -1; // track daily report
 let lastHealthCheckDay = -1; // track daily health check
 let lastEarningsRefreshDay = -1; // track daily earnings cache refresh
 const loggedLegacyOrders = new Set<number>(); // E3b: dedupe legacy-own logs
+const notifiedExitFills = new Set<string>(); // R3: dedup exit-fill Telegram by orderRef
 
 // ── Guardian state (E4) ──
 const GUARDIAN_CONFIG: GuardianConfig = {
@@ -137,10 +139,11 @@ let watchdogTimer: ReturnType<typeof setInterval> | null = null;
 let consecutiveWatchdogFailures = 0;
 let lastGatewayRestart = 0; // timestamp ms
 const GATEWAY_RESTART_COOLDOWN = 60 * 60 * 1000; // 1 hour
-const alertManager = new AlertManager(sendTelegramNotification);
 let lastMarketOpenState: boolean | null = null; // track open→closed transitions
 let marketOpenedAt = 0; // timestamp ms when market last transitioned to open
 const SCAN_GRACE_PERIOD = 20 * 60 * 1000; // 20 min grace after market open (covers 15min safety + scan duration)
+let consecutiveStaleCycles = 0; // R2: debounce scan_stale alerts
+const SCAN_STALE_DEBOUNCE = 3; // require N consecutive stale observations before alerting
 
 // ── Yahoo Finance for position pricing ──
 
@@ -601,27 +604,34 @@ async function watchdogTick(): Promise<void> {
   }
 
   // Check 2: Scan stale — ONLY during market hours, with grace period after open
+  // R2: Debounced — only alert after SCAN_STALE_DEBOUNCE consecutive stale observations
   const inGracePeriod = marketOpenedAt > 0 && (Date.now() - marketOpenedAt) < SCAN_GRACE_PERIOD;
   if (marketOpen && !inGracePeriod && lastScanResult.timestamp) {
     const scanAge = Date.now() - new Date(lastScanResult.timestamp).getTime();
     if (scanAge > 10 * 60 * 1000) {
-      await alertManager.sendAlert("scan_stale", "WARN", [
-        `⚠️ *Trading Agent Watchdog*`,
-        ``,
-        `Letzter Scan veraltet (${Math.round(scanAge / 60_000)}min)`,
-        `Scheduler: ${universeManager.isScheduleRunning() ? "läuft" : "gestoppt"}`,
-      ].join("\n"));
+      consecutiveStaleCycles++;
+      if (consecutiveStaleCycles >= SCAN_STALE_DEBOUNCE) {
+        await alertManager.sendAlert("scan_stale", "WARN", [
+          `⚠️ *Trading Agent Watchdog*`,
+          ``,
+          `Letzter Scan veraltet (${Math.round(scanAge / 60_000)}min, ${consecutiveStaleCycles} Zyklen)`,
+          `Scheduler: ${universeManager.isScheduleRunning() ? "läuft" : "gestoppt"}`,
+        ].join("\n"));
+      }
     } else {
+      consecutiveStaleCycles = 0;
       if (alertManager.isActive("scan_stale")) {
         await alertManager.resolve("scan_stale");
       }
     }
   } else if (marketOpen && inGracePeriod) {
     // Grace period after market open — safety window blocks scans, don't alert
+    consecutiveStaleCycles = 0;
     if (alertManager.isActive("scan_stale")) {
       await alertManager.resolve("scan_stale");
     }
   } else if (!marketOpen && alertManager.isActive("scan_stale")) {
+    consecutiveStaleCycles = 0;
     // Market closed — silently clear scan_stale without recovery message
     // (resolve would send a Telegram message, we just want silence)
   }
@@ -1063,8 +1073,10 @@ async function start(): Promise<void> {
     console.log(`[trading-agent] IBKR reconnect failed (attempt ${attempt})`);
   });
 
-  // Exit-fill Telegram notification
+  // Exit-fill Telegram notification (R3: dedup by orderRef)
   ibkr.on("exitFill", async (info: ExitFillInfo) => {
+    if (notifiedExitFills.has(info.orderRef)) return;
+    notifiedExitFills.add(info.orderRef);
     const legLabel = info.leg === "stop" ? "Stop-Loss" : "Take-Profit";
     let pnlLine = "";
     if (info.entryPrice && info.entryPrice > 0) {

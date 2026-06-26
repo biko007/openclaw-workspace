@@ -11,6 +11,7 @@ import {
   type OrderStateTracker,
 } from "./order-state-tracker.js";
 import { evaluateTrade, shouldExecuteTrade, type TradeDecision } from "./ai-decision.js";
+import type { AlertManager } from "./alert-manager.js";
 import { hasEarningsSoon, getEarningsInfo } from "./earnings-calendar.js";
 
 const yahooFinance = new YahooFinance({
@@ -45,12 +46,14 @@ export class OrderExecutor {
   private getStatus: () => TradingStatus;
   private onNotify: NotifyFn;
   private tracker: OrderStateTracker;
+  private alertManager: AlertManager;
 
-  constructor(ibkr: IBKRConnection, getStatus: () => TradingStatus, onNotify: NotifyFn, tracker: OrderStateTracker) {
+  constructor(ibkr: IBKRConnection, getStatus: () => TradingStatus, onNotify: NotifyFn, tracker: OrderStateTracker, alertManager: AlertManager) {
     this.ibkr = ibkr;
     this.getStatus = getStatus;
     this.onNotify = onNotify;
     this.tracker = tracker;
+    this.alertManager = alertManager;
   }
 
   /**
@@ -117,13 +120,30 @@ export class OrderExecutor {
     console.log(`[executor] Executing ${candidates.length} orders | Budget: $${perOrderBudget.toFixed(0)}/order | Cash: $${cashAvailable.toFixed(0)}`);
 
     const executed: ExecutedTrade[] = [];
+    const evalTracking = { totalEvaluated: 0, errors: [] as { symbol: string; detail: string }[] };
 
     for (const candidate of candidates) {
       try {
-        const trade = await this.executeSingleOrder(candidate, perOrderBudget, stopLossPercent);
+        const trade = await this.executeSingleOrder(candidate, perOrderBudget, stopLossPercent, evalTracking);
         if (trade) executed.push(trade);
       } catch (e) {
         console.error(`[executor] Order failed for ${candidate.symbol}:`, e instanceof Error ? e.message : e);
+      }
+    }
+
+    // R1: Fail-loud — alert if AI eval errors exceed threshold
+    const { totalEvaluated, errors: evalErrors } = evalTracking;
+    if (totalEvaluated > 0 && (evalErrors.length >= 3 || evalErrors.length / totalEvaluated >= 0.5)) {
+      const sample = evalErrors[0]?.detail || "unknown";
+      await this.alertManager.sendAlert("ai_eval_failing", "WARN", [
+        `⚠️ *KI-Eval Fehler*`,
+        ``,
+        `${evalErrors.length}/${totalEvaluated} Bewertungen fehlgeschlagen`,
+        `Beispiel: ${sample}`,
+      ].join("\n"));
+    } else if (totalEvaluated > 0 && evalErrors.length === 0) {
+      if (this.alertManager.isActive("ai_eval_failing")) {
+        await this.alertManager.resolve("ai_eval_failing");
       }
     }
 
@@ -139,6 +159,7 @@ export class OrderExecutor {
     candidate: ScanResult,
     budgetUsd: number,
     stopLossPercent: number,
+    evalTracking: { totalEvaluated: number; errors: { symbol: string; detail: string }[] },
   ): Promise<ExecutedTrade | null> {
     // Get current price from Yahoo Finance
     const universe = loadUniverse();
@@ -193,12 +214,18 @@ export class OrderExecutor {
     let aiDecision: TradeDecision;
     try {
       aiDecision = await evaluateTrade(candidate, currentPrice, undefined, earningsInfo, this.tracker);
+      evalTracking.totalEvaluated++;
+      if (aiDecision.evalError) {
+        evalTracking.errors.push({ symbol: candidate.symbol, detail: aiDecision.errorDetail || "unknown" });
+      }
       if (!shouldExecuteTrade(aiDecision)) {
         console.log(`[executor] AI SKIP ${candidate.symbol}: confidence=${aiDecision.confidence.toFixed(2)} — ${aiDecision.reasoning}`);
         return null;
       }
       console.log(`[executor] AI APPROVED ${candidate.symbol}: confidence=${aiDecision.confidence.toFixed(2)} — ${aiDecision.reasoning}`);
     } catch (e) {
+      evalTracking.totalEvaluated++;
+      evalTracking.errors.push({ symbol: candidate.symbol, detail: e instanceof Error ? e.message : String(e) });
       console.log(`[executor] AI evaluation failed for ${candidate.symbol}, skipping:`, e instanceof Error ? e.message : e);
       return null;
     }

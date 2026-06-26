@@ -44,10 +44,17 @@ const ESCALATION_MS = 15 * 60 * 1000;
 
 describe("checkExitCoverage (E8a)", () => {
 
-  it("qty_undercoverage WARN when stopQty < positionQty", async () => {
+  it("qty_undercoverage WARN when stopQty < positionQty (after grace)", async () => {
     const { sent, sender } = createCaptureSender();
     const alertManager = new AlertManager(sender);
     const cache: GuardianAlertCache = new Map();
+
+    // R4b: Pre-seed cache as if first seen >90s ago (grace expired)
+    cache.set("watchdog_qty_undercoverage", {
+      state: "qty_undercoverage",
+      alertedAt: 0,
+      firstSeenAt: Date.now() - 100_000,
+    });
 
     const classification = makeClassification([
       { symbol: "AAPL", conId: 265598, positionQty: 100, state: "protected" },
@@ -77,7 +84,7 @@ describe("checkExitCoverage (E8a)", () => {
     expect(result.tpCoverage).toBe(0.5);
     expect(result.exitsLabel).toBe("1/1");
 
-    // WARN should have been sent for qty_undercoverage
+    // WARN should have been sent for qty_undercoverage (grace expired)
     expect(sent.length).toBe(1);
     expect(sent[0]).toContain("Qty Undercoverage");
     expect(sent[0]).toContain("50%");

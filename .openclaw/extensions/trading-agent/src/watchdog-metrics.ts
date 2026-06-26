@@ -87,9 +87,16 @@ export async function checkExitCoverage(
   }
 
   // Escalation: qty_undercoverage (qty-based, independent of state)
+  // R4b: Grace window — only alert after persistent undercoverage (90s)
   const qtyKey = "watchdog_qty_undercoverage";
+  const QTY_GRACE_MS = 90_000;
   if (exitsIncomplete === 0 && totalPositionQty > 0 && (stopCoverage < 1 || tpCoverage < 1)) {
-    if (!guardianAlertCache.has(qtyKey)) {
+    const existing = guardianAlertCache.get(qtyKey);
+    if (!existing) {
+      // First observation — record but don't alert yet
+      guardianAlertCache.set(qtyKey, { state: "qty_undercoverage", alertedAt: 0, firstSeenAt: Date.now() });
+    } else if (existing.alertedAt === 0 && Date.now() - (existing.firstSeenAt ?? Date.now()) >= QTY_GRACE_MS) {
+      // Grace expired — persistent undercoverage, alert now
       await alertManager.sendAlert(qtyKey, "WARN", [
         `⚠️ *Watchdog: Qty Undercoverage*`,
         ``,
@@ -97,11 +104,16 @@ export async function checkExitCoverage(
         `Stop coverage: ${(stopCoverage * 100).toFixed(0)}% (${totalStopQty}/${totalPositionQty})`,
         `TP coverage: ${(tpCoverage * 100).toFixed(0)}% (${totalTpQty}/${totalPositionQty})`,
       ].join("\n"));
-      guardianAlertCache.set(qtyKey, { state: "qty_undercoverage", alertedAt: Date.now() });
+      guardianAlertCache.set(qtyKey, { state: "qty_undercoverage", alertedAt: Date.now(), firstSeenAt: existing.firstSeenAt });
     }
+    // else: still within grace or already alerted — do nothing
   } else {
     if (guardianAlertCache.has(qtyKey)) {
-      await alertManager.resolve(qtyKey);
+      const existing = guardianAlertCache.get(qtyKey)!;
+      // Only resolve (send "behoben") if an alert was actually sent
+      if (existing.alertedAt > 0) {
+        await alertManager.resolve(qtyKey);
+      }
       guardianAlertCache.delete(qtyKey);
     }
   }

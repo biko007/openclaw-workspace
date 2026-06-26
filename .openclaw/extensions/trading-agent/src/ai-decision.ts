@@ -68,6 +68,8 @@ export interface TradeDecision {
   suggestedEntry?: number;
   suggestedStop?: number;
   suggestedTarget?: number;
+  evalError?: boolean;
+  errorDetail?: string;
 }
 
 export async function evaluateTrade(
@@ -241,7 +243,13 @@ Antworte NUR mit validem JSON in diesem Format:
       timestamp: new Date().toISOString(),
     });
 
-    return { decision: "SKIP", confidence: 0, reasoning: "KI-Bewertung fehlgeschlagen" };
+    return {
+      decision: "SKIP",
+      confidence: 0,
+      reasoning: "KI-Bewertung fehlgeschlagen",
+      evalError: true,
+      errorDetail: e instanceof Error ? e.message : String(e),
+    };
   }
 }
 

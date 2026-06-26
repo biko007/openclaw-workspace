@@ -64,8 +64,14 @@
 | Check | Beschreibung |
 |-------|-------------|
 | 1 — IBKR-Verbindung | 3 aufeinanderfolgende Failures → automatischer Gateway-Restart (`systemctl --user restart openclaw-ibkr-gateway`) |
-| 2 — Scan-Staleness | >10min seit letztem Scan-Ergebnis, mit 20min Grace nach Market-Open |
+| 2 — Scan-Staleness | >10min seit letztem Scan-Ergebnis, mit 20min Grace nach Market-Open. **Debounce:** erst nach 3 aufeinanderfolgenden stale-Beobachtungen (≈15min bei 5min-Intervall) |
 | 3 — Scheduler-Status | WARN wenn Universe-Scheduler gestoppt |
-| 4 — Exit-Coverage | `exits_incomplete`: WARN → CRITICAL nach 15min. `qty_undercoverage`: WARN wenn coverage < 100% |
+| 4 — Exit-Coverage | `exits_incomplete`: WARN → CRITICAL nach 15min. `qty_undercoverage`: **Grace 90s** — erst nach persistenter Unterdeckung alarmieren, transiente Zustände (Reconnect/Order-Settling) werden geschluckt |
 
 - **OK-Zeile:** `exits=N/N` (N protected / N total) oder `exits=?/?` bei First-Cycle-Grace
+
+## Alert-Hygiene (ab 2026-06-26)
+
+- **Fail-Loud KI-Eval:** Pro Scan-Zyklus werden Eval-Fehler gezählt. Bei ≥3 Fehlern oder ≥50% Fehlerquote: WARN-Alert `ai_eval_failing` mit Beispiel-Fehler. Sauberer Zyklus → resolve.
+- **Exit-Fill Dedup:** `notifiedExitFills` Set (keyed by `orderRef`). Ein logischer Fill = eine Telegram-Nachricht, unabhängig von der Anzahl IBKR-Callbacks.
+- **resolve() Gate (R4a):** `sentDuringCurrentActivation`-Flag in AlertManager. Recovery-Nachricht nur wenn während der aktuellen Aktivierung tatsächlich eine Telegram-Nachricht gesendet wurde. Verhindert „behoben"-Spam bei supprimierten/deduplizierten Alerts.

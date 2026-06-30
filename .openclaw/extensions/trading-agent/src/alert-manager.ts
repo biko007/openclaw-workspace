@@ -23,6 +23,9 @@ interface AlertState {
 
 const DEDUP_WINDOW = 60 * 60 * 1000; // 60 minutes
 
+// Paper-Account, Phase 3 gesperrt — reaktivieren beim Live-Cutover
+const TRADING_ALERTS_TELEGRAM = false;
+
 type TelegramSender = (text: string) => Promise<void>;
 
 export class AlertManager {
@@ -61,7 +64,11 @@ export class AlertManager {
         ? `\n_(${entry.suppressedCount}x unterdrückt seit letztem Alert)_`
         : "";
       console.log(`[alert] CRITICAL ${key}: ${message}`);
-      await this.sendTelegram(message + suffix);
+      if (TRADING_ALERTS_TELEGRAM) {
+        await this.sendTelegram(message + suffix);
+      } else {
+        console.log(`[alert-muted] CRITICAL ${key}: ${message}`);
+      }
       entry.lastSentAt = now;
       entry.suppressedCount = 0;
       entry.sentDuringCurrentActivation = true;
@@ -81,7 +88,11 @@ export class AlertManager {
       ? `\n_(${entry.suppressedCount}x in der letzten Stunde)_`
       : "";
     console.log(`[alert] WARN ${key}: ${message}`);
-    await this.sendTelegram(message + suffix);
+    if (TRADING_ALERTS_TELEGRAM) {
+      await this.sendTelegram(message + suffix);
+    } else {
+      console.log(`[alert-muted] WARN ${key}: ${message}`);
+    }
     entry.lastSentAt = now;
     entry.suppressedCount = 0;
     entry.sentDuringCurrentActivation = true;
@@ -107,7 +118,11 @@ export class AlertManager {
       const suffix = suppressed > 0 ? ` (${suppressed}x unterdrückt)` : "";
       const msg = `✅ *Alert behoben:* ${key}${suffix}`;
       console.log(`[alert] RESOLVED ${key}`);
-      await this.sendTelegram(msg);
+      if (TRADING_ALERTS_TELEGRAM) {
+        await this.sendTelegram(msg);
+      } else {
+        console.log(`[alert-muted] RESOLVED ${key}: ${msg}`);
+      }
     }
   }
 

@@ -19,6 +19,10 @@ export interface TradingStatus {
   netLiquidation: number;
   cashBalance: number;
   timestamp: string;
+  // Dedup persistence — survives restarts (added 2026-06-30)
+  lastReportDay?: number;
+  lastHealthCheckDay?: number;
+  lastEarningsRefreshDay?: number;
 }
 
 export interface WatchlistItem {
@@ -118,6 +122,9 @@ export function defaultStatus(): TradingStatus {
     netLiquidation: 0,
     cashBalance: 0,
     timestamp: new Date().toISOString(),
+    lastReportDay: -1,
+    lastHealthCheckDay: -1,
+    lastEarningsRefreshDay: -1,
   };
 }
 

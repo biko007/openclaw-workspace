@@ -102,3 +102,13 @@ export function marketStatusLabel(now?: Date): string {
   }
   return `${dayStr} ${timeStr} (Markt geschlossen)`;
 }
+
+/**
+ * Returns true on weekdays (Mon-Fri) in Europe/Berlin.
+ * Weekday-only gate for daily info-sends. NO holiday calendar yet —
+ * XETRA/NYSE holidays still report (see TODO: IBKR tradingHours integration).
+ */
+export function isTradingDay(now?: Date): boolean {
+  const { dayOfWeek } = getBerlinTime(now);
+  return dayOfWeek >= 1 && dayOfWeek <= 5;
+}

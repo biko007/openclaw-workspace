@@ -27,7 +27,7 @@ import {
   daysUntilEarnings,
   hasEarningsSoon,
 } from "./earnings-calendar.js";
-import { isMarketOpen, marketStatusLabel } from "./market-hours.js";
+import { isMarketOpen, marketStatusLabel, isTradingDay } from "./market-hours.js";
 import { AlertManager } from "./alert-manager.js";
 import { checkExitCoverage } from "./watchdog-metrics.js";
 import {
@@ -112,9 +112,9 @@ const executor = new OrderExecutor(ibkr, () => currentStatus, sendTelegramNotifi
 let currentStatus: TradingStatus = loadStatus();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let previousPositionSymbols = new Map<string, Position>(); // track for close detection
-let lastReportDay = -1; // track daily report
-let lastHealthCheckDay = -1; // track daily health check
-let lastEarningsRefreshDay = -1; // track daily earnings cache refresh
+let lastReportDay = currentStatus.lastReportDay ?? -1;
+let lastHealthCheckDay = currentStatus.lastHealthCheckDay ?? -1;
+let lastEarningsRefreshDay = currentStatus.lastEarningsRefreshDay ?? -1;
 const loggedLegacyOrders = new Set<number>(); // E3b: dedupe legacy-own logs
 const notifiedExitFills = new Set<string>(); // R3: dedup exit-fill Telegram by orderRef
 
@@ -261,16 +261,20 @@ async function pollIBKR(): Promise<void> {
   const now = new Date();
   const utcHour = now.getUTCHours();
   const utcDay = now.getUTCDate();
-  if (utcHour === 18 && lastReportDay !== utcDay) {
+  if (utcHour === 18 && lastReportDay !== utcDay && isTradingDay()) {
     lastReportDay = utcDay;
+    currentStatus.lastReportDay = lastReportDay;
+    saveStatus(currentStatus);
     sendDailyReport().catch((e) =>
       console.log("[trading-agent] Daily report error:", e instanceof Error ? e.message : e),
     );
   }
 
   // ── Daily Health Check at 08:00 UTC ──
-  if (utcHour === 8 && lastHealthCheckDay !== utcDay) {
+  if (utcHour === 8 && lastHealthCheckDay !== utcDay && isTradingDay()) {
     lastHealthCheckDay = utcDay;
+    currentStatus.lastHealthCheckDay = lastHealthCheckDay;
+    saveStatus(currentStatus);
     sendHealthCheck().catch((e) =>
       console.log("[trading-agent] Health check error:", e instanceof Error ? e.message : e),
     );
@@ -279,6 +283,8 @@ async function pollIBKR(): Promise<void> {
   // ── Daily Earnings Cache Refresh at 06:00 UTC ──
   if (utcHour === 6 && lastEarningsRefreshDay !== utcDay) {
     lastEarningsRefreshDay = utcDay;
+    currentStatus.lastEarningsRefreshDay = lastEarningsRefreshDay;
+    saveStatus(currentStatus);
     refreshEarningsCache().catch((e) =>
       console.log("[earnings] Daily refresh error:", e instanceof Error ? e.message : e),
     );

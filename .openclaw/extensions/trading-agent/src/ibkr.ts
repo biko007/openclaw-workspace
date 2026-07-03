@@ -549,6 +549,9 @@ export class IBKRConnection extends EventEmitter {
           case "RealizedPnL":
             summary.realizedPnl = v;
             break;
+          case "DailyPnL":
+            summary.dailyPnl = v;
+            break;
         }
       };
 
@@ -572,7 +575,7 @@ export class IBKRConnection extends EventEmitter {
       this.api.reqAccountSummary(
         reqId,
         "All",
-        "NetLiquidation,TotalCashValue,UnrealizedPnL,RealizedPnL",
+        "NetLiquidation,TotalCashValue,UnrealizedPnL,RealizedPnL,DailyPnL",
       );
     });
   }

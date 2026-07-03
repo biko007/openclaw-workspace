@@ -75,3 +75,16 @@
 - **Fail-Loud KI-Eval:** Pro Scan-Zyklus werden Eval-Fehler gezählt. Bei ≥3 Fehlern oder ≥50% Fehlerquote: WARN-Alert `ai_eval_failing` mit Beispiel-Fehler. Sauberer Zyklus → resolve.
 - **Exit-Fill Dedup:** `notifiedExitFills` Set (keyed by `orderRef`). Ein logischer Fill = eine Telegram-Nachricht, unabhängig von der Anzahl IBKR-Callbacks.
 - **resolve() Gate (R4a):** `sentDuringCurrentActivation`-Flag in AlertManager. Recovery-Nachricht nur wenn während der aktuellen Aktivierung tatsächlich eine Telegram-Nachricht gesendet wurde. Verhindert „behoben"-Spam bei supprimierten/deduplizierten Alerts.
+
+## Trade-Event-Telegram (ab 2026-07-03)
+
+- **ENV-Flag:** `TRADE_EVENT_TELEGRAM` (Default: `true`)
+- **`false`:** Unterdrückt individuelle Trade-Notifications (Position closed, Exit-Fill, Manual Close)
+- **Ungegated:** Daily Report, Daily Health Check, CRITICAL-Alerts, Guardian-Alerts (eigenes `TRADING_ALERTS_TELEGRAM`)
+- Gate-Points: `onPositionClosed()`, `POST /close/:symbol`, Exit-Fill Callback
+
+## Daily-Report-Fixes (ab 2026-07-03)
+
+- **DailyPnL:** `reqAccountSummary` fragt jetzt `DailyPnL`-Tag ab. `onSummary`-Handler füllt `summary.dailyPnl`.
+- **Tracker-Exits:** `todayExits` enthält jetzt Legacy + Tracker SELL-Fills. Win/Loss-Zählung sucht Entry in Legacy UND Tracker.
+- **Wording:** „Beste Position" → „Beste offene Position" (unrealisiert kenntlich).

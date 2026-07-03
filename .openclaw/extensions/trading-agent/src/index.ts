@@ -118,6 +118,11 @@ let lastEarningsRefreshDay = currentStatus.lastEarningsRefreshDay ?? -1;
 const loggedLegacyOrders = new Set<number>(); // E3b: dedupe legacy-own logs
 const notifiedExitFills = new Set<string>(); // R3: dedup exit-fill Telegram by orderRef
 
+// Suppress individual trade event notifications (default: true = send)
+// Set TRADE_EVENT_TELEGRAM=false in env to receive only daily summaries
+const TRADE_EVENT_TELEGRAM = (process.env.TRADE_EVENT_TELEGRAM ?? "true").toLowerCase() !== "false";
+console.log(`[trading-agent] TRADE_EVENT_TELEGRAM=${TRADE_EVENT_TELEGRAM}`);
+
 // ── Guardian state (E4) ──
 const GUARDIAN_CONFIG: GuardianConfig = {
   fallbackMode: (process.env.GUARDIAN_FALLBACK_MODE as "market_close" | "alert_only") || "market_close",
@@ -401,7 +406,7 @@ async function notifyPositionClosed(symbol: string, lastKnown: Position): Promis
   ].filter(Boolean).join("\n");
 
   console.log(`[trading-agent] Position closed: ${symbol} | P&L: ${pnlSign}$${pnl.toFixed(2)} | ${closeReason}`);
-  await sendTelegramNotification(msg);
+  if (TRADE_EVENT_TELEGRAM) await sendTelegramNotification(msg);
 }
 
 // ── Daily Trading Report ──
@@ -442,16 +447,19 @@ async function sendDailyReport(): Promise<void> {
     (t) => !legacyExitKeys.has(`${t.symbol}|${t.timestamp.slice(0, 16)}`),
   );
   const todayExitCount = legacyTodayExits.length + uniqueTrackerExits.length;
-  const todayExits = legacyTodayExits;
+  const todayExits = [...legacyTodayExits, ...uniqueTrackerExits];
 
   // Win/Loss from closed trades
   let wins = 0;
   let losses = 0;
   for (const exit of todayExits) {
-    // Find matching entry
+    // Find matching entry (legacy first, then tracker)
     const entry = orders.find(
       (o) => o.symbol === exit.symbol && o.side === "BUY" && o.status === "Filled" &&
         o.timestamp < exit.timestamp,
+    ) ?? trackerEntries.find(
+      (t) => t.symbol === exit.symbol && t.side === "BUY" &&
+        t.timestamp < exit.timestamp,
     );
     if (entry) {
       const entryPrice = entry.fillPrice || entry.price;
@@ -517,8 +525,8 @@ async function sendDailyReport(): Promise<void> {
     todayExits.length > 0 ? `Ergebnis: ${wins}W / ${losses}L` : "",
     `Tages-P&L: ${pnlSign}$${status.dailyPnl.toFixed(2)}`,
     ``,
-    bestPos ? `Beste Position: ${bestPos}` : "",
-    worstPos ? `Schlechteste: ${worstPos}` : "",
+    bestPos ? `Beste offene Position: ${bestPos}` : "",
+    worstPos ? `Schlechteste offene: ${worstPos}` : "",
     ``,
     `Offene Positionen: ${status.positions.length}`,
     lastClassification ? `Exit-Coverage: ${lastClassification.stateCount["protected"] ?? 0}/${lastClassification.positions.length}` : "",
@@ -923,7 +931,7 @@ app.post("/close/:symbol", async (req, res) => {
       `Menge: ${pos.quantity} Stk`,
     ].join("\n");
 
-    sendTelegramNotification(msg).catch(() => {});
+    if (TRADE_EVENT_TELEGRAM) sendTelegramNotification(msg).catch(() => {});
 
     console.log(`[trading-agent] Closed ${symbol}: ${pos.quantity} @ $${fillPrice.toFixed(2)} | P&L: ${pnlSign}$${pnl.toFixed(2)}`);
 
@@ -1097,7 +1105,7 @@ async function start(): Promise<void> {
       `Fill: $${info.fillPrice.toFixed(2)} | Qty: ${info.quantity}`,
       pnlLine,
     ].filter(Boolean).join("\n");
-    await sendTelegramNotification(msg);
+    if (TRADE_EVENT_TELEGRAM) await sendTelegramNotification(msg);
   });
 
   // Rebuild tracker from durable log

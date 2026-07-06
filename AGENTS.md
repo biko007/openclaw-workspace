@@ -52,6 +52,13 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 - `trash` > `rm` (recoverable beats gone forever)
 - When in doubt, ask.
 
+### owner-facts.md — SCHREIBVERBOT
+
+**owner-facts.md NIEMALS erstellen, ändern, kopieren oder im Workspace ablegen.**
+Diese Datei wird ausschließlich vom Owner manuell gepflegt und automatisch injiziert.
+Wenn der Owner einen neuen Fakt nennt: normal bestätigen, KEINE Datei-Aktion.
+Die Speicherung übernimmt das Memory-System (owner_memory) vollautomatisch.
+
 ## External vs Internal
 
 **Safe to do freely:**

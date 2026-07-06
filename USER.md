@@ -10,7 +10,9 @@ _Learn about the person you're helping. Update this as you go._
 
 ## Context
 
-- Shared updated professional bio (2026-02-17): Managing Director & Co-Founder of STORZ & BICKEL (Tuttlingen, Germany), now part of executive leadership at Canopy Growth.
+- Owner-Profil (owner-facts.md) wird automatisch injiziert (before_agent_start-Hook). Zusätzliche Fakten laufen automatisch über owner_memory. owner-facts.md wird NUR vom Owner gepflegt — NIEMALS vom Agenten erstellt, geändert oder kopiert.
+- Preferred address per SSOT: "Herr Bickel"; executive-style, short, precise, German without unnecessary anglicisms; ask instead of guessing when unclear.
+- Shared updated professional bio (2026-02-17), now superseded by owner-facts.md where newer: Co-Founder of STORZ & BICKEL (Tuttlingen, Germany); officially left STORZ & BICKEL GmbH on 2026-05-31.
 - STORZ & BICKEL context: VOLCANO described as first medically certified cannabis vaporizer worldwide; company active for 25+ years and positioned as pioneer/world market leader.
 
 ---

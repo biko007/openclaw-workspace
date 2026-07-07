@@ -57,16 +57,18 @@ const POLL_INTERVAL = 30_000;
 // ── Telegram notification ──
 
 function loadTelegramConfig(): { botToken: string; chatId: string } {
-  try {
-    const cfgPath = join(process.env.HOME || "/home/biko", ".openclaw/openclaw.json");
-    const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
-    const botToken = cfg?.channels?.telegram?.botToken || "";
-    // Chat ID from health settings or env
-    const chatId = process.env.TELEGRAM_CHAT_ID || "133260792";
-    return { botToken, chatId };
-  } catch {
-    return { botToken: "", chatId: "" };
+  let botToken = process.env.TELEGRAM_BOT_TOKEN || '';
+  if (!botToken) {
+    try {
+      const cfgPath = join(process.env.HOME || "/home/biko", ".openclaw/openclaw.json");
+      const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
+      const raw = cfg?.channels?.telegram?.botToken;
+      if (typeof raw === 'string') botToken = raw;
+      else if (raw?.source === 'env' && raw?.id) botToken = process.env[raw.id] || '';
+    } catch { /* ignore */ }
   }
+  const chatId = process.env.TELEGRAM_CHAT_ID || "133260792";
+  return { botToken, chatId };
 }
 
 const telegramCfg = loadTelegramConfig();

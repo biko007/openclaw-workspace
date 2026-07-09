@@ -88,3 +88,14 @@
 - **DailyPnL:** `reqAccountSummary` fragt jetzt `DailyPnL`-Tag ab. `onSummary`-Handler füllt `summary.dailyPnl`.
 - **Tracker-Exits:** `todayExits` enthält jetzt Legacy + Tracker SELL-Fills. Win/Loss-Zählung sucht Entry in Legacy UND Tracker.
 - **Wording:** „Beste Position" → „Beste offene Position" (unrealisiert kenntlich).
+
+## Manual Close Tracking + Paper-Account dailyPnl (ab 2026-07-09)
+
+- **position_closed Event:** Neuer Event-Typ im OrderStateTracker (`orders-v2.jsonl`).
+  Source `"manual"` (API /close/:symbol) oder `"sentinel"` (pollIBKR Positionserkennung).
+  Dedup: apiClosedSymbols Set (120s TTL) + `hasRecentClose()` + Bracket-Exit-Check.
+- **Daily Report C2:** Win/Loss zählt position_closed Events mit. Ergebniszeile:
+  `"Ergebnis: NW / NL (davon manuell: N)"`. 30-Tage-Statistik integriert Tracker-Exits.
+- **Daily Report C1:** Bei Paper-Account (IBKR dailyPnl=0) eigene Berechnung:
+  `~dailyPnl = realizedPnlToday + (currentUnrealized - yesterdayUnrealized)`.
+  `"~"` Präfix kennzeichnet berechneten Wert. Live-Account-Pfad unverändert.

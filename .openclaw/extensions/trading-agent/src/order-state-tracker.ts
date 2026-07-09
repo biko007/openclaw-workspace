@@ -39,7 +39,8 @@ export type OrderEventType =
   | "replacement_intent_abandoned"
   | "fallback_intent_started"
   | "fallback_intent_confirmed"
-  | "fallback_intent_abandoned";
+  | "fallback_intent_abandoned"
+  | "position_closed";
 
 // ── Interfaces ──
 
@@ -118,13 +119,25 @@ export interface IntentEvent extends OrderEventBase {
   newGen?: number;
 }
 
+export interface PositionClosedEvent extends OrderEventBase {
+  type: "position_closed";
+  symbol: string;
+  quantity: number;
+  entryPrice: number;
+  exitPrice: number;
+  pnl: number;
+  pnlPercent: number;
+  source: "manual" | "sentinel";
+}
+
 export type OrderEvent =
   | OrderSubmittedEvent
   | OrderStatusChangedEvent
   | OrderFilledEvent
   | OrderCancelledEvent
   | OrderErrorEvent
-  | IntentEvent;
+  | IntentEvent
+  | PositionClosedEvent;
 
 export interface ExitState {
   stopOrder?: { orderRef: string; status: string };
@@ -144,6 +157,8 @@ export interface TrackerTradeRecord {
   timestamp: string;
   status: string;
   tradeIntentId: string;
+  source?: "tracked" | "manual" | "sentinel";
+  pnl?: number;
 }
 
 export interface OpenIntent {
@@ -372,6 +387,10 @@ export class OrderStateTracker {
   private orderRefsByConId = new Map<number, Set<string>>();
   private _openIntents = new Map<string, IntentEvent>();
 
+  // Position closed events (manual/sentinel closes)
+  private _closedPositions: PositionClosedEvent[] = [];
+  private closedDedupeSet = new Set<string>();
+
   // For tracking errors per orderRef
   private errorsByRef = new Map<string, OrderErrorEvent[]>();
   private errorDedupeSet = new Set<string>();
@@ -399,6 +418,8 @@ export class OrderStateTracker {
     this.eventsByOrderRef.clear();
     this.orderRefsByConId.clear();
     this._openIntents.clear();
+    this._closedPositions = [];
+    this.closedDedupeSet.clear();
     this.errorsByRef.clear();
     this.errorDedupeSet.clear();
     this.latestStatusByRef.clear();
@@ -644,9 +665,41 @@ export class OrderStateTracker {
       }
     }
 
+    // Include position_closed events (manual/sentinel closes)
+    if (!options?.leg) {
+      for (const pc of this._closedPositions) {
+        if (options?.symbol && pc.symbol !== options.symbol) continue;
+        if (cutoff && pc.timestamp < cutoff) continue;
+        results.push({
+          symbol: pc.symbol,
+          side: "SELL",
+          quantity: pc.quantity,
+          price: pc.exitPrice,
+          fillPrice: pc.exitPrice,
+          timestamp: pc.timestamp,
+          status: "Filled",
+          tradeIntentId: `CLOSE-${pc.source}`,
+          source: pc.source,
+          pnl: pc.pnl,
+        });
+      }
+    }
+
     // Sort by timestamp descending
     results.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
     return results;
+  }
+
+  /**
+   * Check if a position_closed event was already written for this symbol
+   * within the given time window. Used for sentinel dedup.
+   */
+  hasRecentClose(symbol: string, withinMs: number): boolean {
+    const cutoff = new Date(Date.now() - withinMs).toISOString();
+    for (const pc of this._closedPositions) {
+      if (pc.symbol === symbol && pc.timestamp >= cutoff) return true;
+    }
+    return false;
   }
 
   get tradingLocked(): boolean {
@@ -674,6 +727,10 @@ export class OrderStateTracker {
       const e = event as OrderErrorEvent;
       const key = `${e.orderRef}|${e.errorCode}|${e.errorMessage}`;
       return this.errorDedupeSet.has(key);
+    }
+
+    if (event.type === "position_closed") {
+      return this.closedDedupeSet.has(event.orderRef);
     }
 
     return false;
@@ -753,6 +810,13 @@ export class OrderStateTracker {
           this.errorsByRef.set(e.orderRef, errors);
         }
         errors.push(e);
+        break;
+      }
+
+      case "position_closed": {
+        const e = event as PositionClosedEvent;
+        this._closedPositions.push(e);
+        this.closedDedupeSet.add(e.orderRef);
         break;
       }
 

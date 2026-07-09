@@ -248,6 +248,19 @@ export function recordDailyPerformance(status: TradingStatus): void {
   savePerformance(year, month, entries);
 }
 
+/**
+ * Load performance entry for the previous trading day.
+ * Handles cross-month boundary (e.g., today Jul 1 → yesterday Jun 30).
+ */
+export function loadPreviousDayPerformance(): PerformanceEntry | null {
+  const yesterday = new Date(Date.now() - 86_400_000);
+  const year = yesterday.getFullYear();
+  const month = yesterday.getMonth() + 1;
+  const dateStr = yesterday.toISOString().slice(0, 10);
+  const entries = loadPerformance(year, month);
+  return entries.find((e) => e.date === dateStr) ?? null;
+}
+
 // ── Universe ──
 
 export interface UniverseSymbol {

@@ -7,7 +7,7 @@ const execAsync = promisify(execCb);
 import express from "express";
 import YahooFinance from "yahoo-finance2";
 import { IBKRConnection, type Position, type ExitFillInfo, type SyncSnapshot } from "./ibkr.js";
-import { DurableEventLog, OrderStateTracker } from "./order-state-tracker.js";
+import { DurableEventLog, OrderStateTracker, type PositionClosedEvent } from "./order-state-tracker.js";
 import { classifyPositions, type ClassificationResult } from "./position-classifier.js";
 import {
   runGuardianCycle,
@@ -40,6 +40,7 @@ import {
   loadStrategies,
   loadOrders,
   loadPerformance,
+  loadPreviousDayPerformance,
   recordDailyPerformance,
   loadUniverse,
   loadUniverseConfig,
@@ -119,6 +120,7 @@ let lastHealthCheckDay = currentStatus.lastHealthCheckDay ?? -1;
 let lastEarningsRefreshDay = currentStatus.lastEarningsRefreshDay ?? -1;
 const loggedLegacyOrders = new Set<number>(); // E3b: dedupe legacy-own logs
 const notifiedExitFills = new Set<string>(); // R3: dedup exit-fill Telegram by orderRef
+const apiClosedSymbols = new Set<string>(); // Dedup: API close wrote position_closed → sentinel skips
 
 // Suppress individual trade event notifications (default: true = send)
 // Set TRADE_EVENT_TELEGRAM=false in env to receive only daily summaries
@@ -409,6 +411,40 @@ async function notifyPositionClosed(symbol: string, lastKnown: Position): Promis
 
   console.log(`[trading-agent] Position closed: ${symbol} | P&L: ${pnlSign}$${pnl.toFixed(2)} | ${closeReason}`);
   if (TRADE_EVENT_TELEGRAM) await sendTelegramNotification(msg);
+
+  // Write position_closed event for daily report tracking (sentinel path)
+  // Skip if: (1) API close already wrote a record, or (2) tracker has a recent close
+  if (apiClosedSymbols.has(symbol)) {
+    console.log(`[trading-agent] position_closed skipped for ${symbol} — already tracked by API close`);
+    return;
+  }
+  if (tracker.hasRecentClose(symbol, 120_000)) {
+    console.log(`[trading-agent] position_closed skipped for ${symbol} — recent close already recorded`);
+    return;
+  }
+  // Check if a bracket exit fill exists for this symbol today (tracked by IBKR events)
+  const today = new Date().toISOString().slice(0, 10);
+  const recentSells = tracker.getRecentFills({ symbol, sinceDays: 1 })
+    .filter((t) => t.side === "SELL" && t.timestamp.startsWith(today) && !t.source);
+  if (recentSells.length > 0) {
+    console.log(`[trading-agent] position_closed skipped for ${symbol} — bracket exit already tracked`);
+    return;
+  }
+
+  const closeEvent: PositionClosedEvent = {
+    type: "position_closed",
+    timestamp: new Date().toISOString(),
+    orderRef: `CLOSE|sentinel|${symbol}|${new Date().toISOString().replace(/[:.]/g, "")}`,
+    symbol,
+    quantity: lastKnown.quantity,
+    entryPrice,
+    exitPrice: lastKnown.marketPrice,
+    pnl,
+    pnlPercent: pnlPct,
+    source: "sentinel",
+  };
+  tracker.applyEvent(closeEvent);
+  console.log(`[trading-agent] position_closed recorded: ${symbol} | source=sentinel | P&L=${pnlSign}$${pnl.toFixed(2)}`);
 }
 
 // ── Daily Trading Report ──
@@ -451,11 +487,23 @@ async function sendDailyReport(): Promise<void> {
   const todayExitCount = legacyTodayExits.length + uniqueTrackerExits.length;
   const todayExits = [...legacyTodayExits, ...uniqueTrackerExits];
 
-  // Win/Loss from closed trades
+  // Win/Loss from closed trades + realized P&L computation
   let wins = 0;
   let losses = 0;
+  let realizedPnlToday = 0;
+  let manualCloseCount = 0;
   for (const exit of todayExits) {
-    // Find matching entry (legacy first, then tracker)
+    // position_closed events carry their own P&L and source
+    if ("pnl" in exit && exit.pnl !== undefined) {
+      realizedPnlToday += exit.pnl;
+      if (exit.pnl >= 0) wins++;
+      else losses++;
+      if ("source" in exit && (exit.source === "manual" || exit.source === "sentinel")) {
+        manualCloseCount++;
+      }
+      continue;
+    }
+    // Standard exits: find matching entry (legacy first, then tracker)
     const entry = orders.find(
       (o) => o.symbol === exit.symbol && o.side === "BUY" && o.status === "Filled" &&
         o.timestamp < exit.timestamp,
@@ -466,8 +514,25 @@ async function sendDailyReport(): Promise<void> {
     if (entry) {
       const entryPrice = entry.fillPrice || entry.price;
       const exitPrice = exit.fillPrice || exit.price;
+      const exitPnl = (exitPrice - entryPrice) * exit.quantity;
+      realizedPnlToday += exitPnl;
       if (exitPrice > entryPrice) wins++;
       else losses++;
+    }
+  }
+
+  // C1-Fix: Compute dailyPnl for paper accounts (IBKR paper returns 0)
+  let displayDailyPnl = status.dailyPnl;
+  let pnlComputed = false;
+  if (status.dailyPnl === 0) {
+    const prevDay = loadPreviousDayPerformance();
+    const currentUnrealized = status.positions.reduce((sum, p) => sum + p.unrealizedPnl, 0);
+    const prevUnrealized = prevDay?.unrealizedPnl ?? 0;
+    const unrealizedDelta = currentUnrealized - prevUnrealized;
+    const computed = realizedPnlToday + unrealizedDelta;
+    if (computed !== 0 || realizedPnlToday !== 0) {
+      displayDailyPnl = computed;
+      pnlComputed = true;
     }
   }
 
@@ -482,14 +547,15 @@ async function sendDailyReport(): Promise<void> {
     worstPos = `${worst.symbol}: $${worst.unrealizedPnl.toFixed(2)}`;
   }
 
-  // 30-day stats
+  // 30-day stats (legacy + tracker position_closed events)
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const recentOrders = orders.filter((o) => o.timestamp >= thirtyDaysAgo);
-  const recentEntries = recentOrders.filter((o) => o.side === "BUY" && o.status === "Filled");
   const recentExits = recentOrders.filter(
     (o) => o.side === "SELL" && (o.status === "Filled" || o.status === "Stopped" || o.status === "TargetHit"),
   );
+  const trackerRecentExits = tracker.getRecentFills({ sinceDays: 30 })
+    .filter((t) => t.side === "SELL");
 
   let totalWins30d = 0;
   let totalTrades30d = 0;
@@ -505,18 +571,48 @@ async function sendDailyReport(): Promise<void> {
       if (exitP > entryP) totalWins30d++;
     }
   }
+  // Include tracker exits (bracket fills + position_closed) in 30d stats
+  for (const exit of trackerRecentExits) {
+    if ("pnl" in exit && exit.pnl !== undefined) {
+      totalTrades30d++;
+      if (exit.pnl > 0) totalWins30d++;
+      continue;
+    }
+    const entry = trackerEntries.find(
+      (t) => t.symbol === exit.symbol && t.side === "BUY" && t.timestamp < exit.timestamp,
+    ) ?? orders.find(
+      (o) => o.symbol === exit.symbol && o.side === "BUY" && o.status === "Filled" &&
+        o.timestamp < exit.timestamp,
+    );
+    if (entry) {
+      totalTrades30d++;
+      const entryP = entry.fillPrice || entry.price;
+      const exitP = exit.fillPrice || exit.price;
+      if (exitP > entryP) totalWins30d++;
+    }
+  }
   const winRate30d = totalTrades30d > 0 ? ((totalWins30d / totalTrades30d) * 100).toFixed(0) : "—";
 
-  // Monthly P&L from performance data
+  // Monthly P&L from performance data + realized P&L from closes
   const monthPerf = loadPerformance(now.getFullYear(), now.getMonth() + 1);
-  const monthPnl = monthPerf.reduce((sum, e) => sum + e.dailyPnl, 0);
+  let monthPnl = monthPerf.reduce((sum, e) => sum + e.dailyPnl, 0);
+  // If IBKR dailyPnl was 0 for the month, add computed realized P&L
+  if (pnlComputed) monthPnl += realizedPnlToday;
 
   // Decisions today
   const decisions = loadRecentDecisions(100).filter((d) => d.timestamp.startsWith(today));
   const buyDecisions = decisions.filter((d) => d.decision === "BUY").length;
   const skipDecisions = decisions.filter((d) => d.decision === "SKIP").length;
 
-  const pnlSign = status.dailyPnl >= 0 ? "+" : "";
+  const pnlPrefix = pnlComputed ? "~" : "";
+  const pnlSign = displayDailyPnl >= 0 ? "+" : "";
+
+  // Build results line with manual close annotation
+  let resultsLine = "";
+  if (todayExits.length > 0) {
+    resultsLine = `Ergebnis: ${wins}W / ${losses}L`;
+    if (manualCloseCount > 0) resultsLine += ` (davon manuell: ${manualCloseCount})`;
+  }
 
   const msg = [
     `📊 *Täglicher Trading-Report*`,
@@ -524,8 +620,8 @@ async function sendDailyReport(): Promise<void> {
     `*${today}*`,
     ``,
     `Trades heute: ${todayOrderCount} eröffnet, ${todayExitCount} geschlossen`,
-    todayExits.length > 0 ? `Ergebnis: ${wins}W / ${losses}L` : "",
-    `Tages-P&L: ${pnlSign}$${status.dailyPnl.toFixed(2)}`,
+    resultsLine,
+    `Tages-P&L: ${pnlPrefix}${pnlSign}$${displayDailyPnl.toFixed(2)}`,
     ``,
     bestPos ? `Beste offene Position: ${bestPos}` : "",
     worstPos ? `Schlechteste offene: ${worstPos}` : "",
@@ -936,6 +1032,24 @@ app.post("/close/:symbol", async (req, res) => {
     if (TRADE_EVENT_TELEGRAM) sendTelegramNotification(msg).catch(() => {});
 
     console.log(`[trading-agent] Closed ${symbol}: ${pos.quantity} @ $${fillPrice.toFixed(2)} | P&L: ${pnlSign}$${pnl.toFixed(2)}`);
+
+    // Write position_closed event for daily report tracking (API close path)
+    const closeEvent: PositionClosedEvent = {
+      type: "position_closed",
+      timestamp: new Date().toISOString(),
+      orderRef: `CLOSE|manual|${symbol}|${new Date().toISOString().replace(/[:.]/g, "")}`,
+      symbol,
+      quantity: pos.quantity,
+      entryPrice: pos.avgCost,
+      exitPrice: fillPrice,
+      pnl,
+      pnlPercent: pnlPct,
+      source: "manual",
+    };
+    tracker.applyEvent(closeEvent);
+    apiClosedSymbols.add(symbol);
+    setTimeout(() => apiClosedSymbols.delete(symbol), 120_000);
+    console.log(`[trading-agent] position_closed recorded: ${symbol} | source=manual | P&L=${pnlSign}$${pnl.toFixed(2)}`);
 
     res.json({ symbol, quantity: pos.quantity, fillPrice, pnl, avgCost: pos.avgCost });
   } catch (e) {

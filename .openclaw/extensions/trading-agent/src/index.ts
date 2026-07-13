@@ -28,6 +28,7 @@ import {
   hasEarningsSoon,
 } from "./earnings-calendar.js";
 import { isMarketOpen, marketStatusLabel, isTradingDay } from "./market-hours.js";
+import { getCalendar } from "./trading-calendar.js";
 import { AlertManager } from "./alert-manager.js";
 import { checkExitCoverage } from "./watchdog-metrics.js";
 import {
@@ -118,6 +119,7 @@ let previousPositionSymbols = new Map<string, Position>(); // track for close de
 let lastReportDay = currentStatus.lastReportDay ?? -1;
 let lastHealthCheckDay = currentStatus.lastHealthCheckDay ?? -1;
 let lastEarningsRefreshDay = currentStatus.lastEarningsRefreshDay ?? -1;
+let lastCalendarRefreshDay = -1;
 const loggedLegacyOrders = new Set<number>(); // E3b: dedupe legacy-own logs
 const notifiedExitFills = new Set<string>(); // R3: dedup exit-fill Telegram by orderRef
 const apiClosedSymbols = new Set<string>(); // Dedup: API close wrote position_closed → sentinel skips
@@ -200,6 +202,29 @@ async function enrichPositionsWithPrices(positions: Position[]): Promise<Positio
   } catch (e) {
     console.log("[trading-agent] Yahoo price enrichment error:", e instanceof Error ? e.message : e);
     return positions;
+  }
+}
+
+// ── Trading Calendar Refresh ──
+
+async function refreshTradingCalendar(): Promise<void> {
+  const cal = getCalendar();
+  const refs: { exchange: string; symbol: string; currency: string }[] = [
+    { exchange: "NYSE", symbol: "SPY", currency: "USD" },
+    { exchange: "XETRA", symbol: "SAP", currency: "EUR" },
+  ];
+  for (const ref of refs) {
+    try {
+      const { liquidHours } = await ibkr.fetchLiquidHours(ref.symbol, "SMART", ref.currency);
+      if (liquidHours) {
+        cal.update(ref.exchange, liquidHours);
+        console.log(`[calendar] ${ref.exchange} updated (${ref.symbol})`);
+      } else {
+        console.warn(`[calendar] ${ref.exchange}: no liquidHours returned for ${ref.symbol}`);
+      }
+    } catch (e) {
+      console.warn(`[calendar] ${ref.exchange} refresh failed:`, e instanceof Error ? e.message : e);
+    }
   }
 }
 
@@ -296,6 +321,14 @@ async function pollIBKR(): Promise<void> {
     saveStatus(currentStatus);
     refreshEarningsCache().catch((e) =>
       console.log("[earnings] Daily refresh error:", e instanceof Error ? e.message : e),
+    );
+  }
+
+  // ── Daily Trading Calendar Refresh at 06:00 UTC ──
+  if (utcHour === 6 && lastCalendarRefreshDay !== utcDay && connected) {
+    lastCalendarRefreshDay = utcDay;
+    refreshTradingCalendar().catch((e) =>
+      console.warn("[calendar] Daily refresh error:", e instanceof Error ? e.message : e),
     );
   }
 
@@ -1197,6 +1230,9 @@ async function start(): Promise<void> {
       console.warn("[trading-agent] Sync barrier failed on reconnect:", e instanceof Error ? e.message : e);
     }
     pollIBKR().catch((e) => console.error("[trading-agent] Post-reconnect poll error:", e));
+    refreshTradingCalendar().catch((e) =>
+      console.warn("[calendar] Post-reconnect refresh error:", e instanceof Error ? e.message : e),
+    );
   });
 
   ibkr.on("reconnectFailed", (attempt: number) => {
@@ -1298,6 +1334,13 @@ async function start(): Promise<void> {
   refreshEarningsCache().catch((e) =>
     console.log("[earnings] Initial refresh error:", e instanceof Error ? e.message : e),
   );
+
+  // Initial trading calendar refresh (holiday detection)
+  if (ibkr.isConnected()) {
+    refreshTradingCalendar().catch((e) =>
+      console.warn("[calendar] Initial refresh error:", e instanceof Error ? e.message : e),
+    );
+  }
 
   // Start polling
   pollTimer = setInterval(() => {

@@ -2,8 +2,10 @@
  * Market hours module — determines whether relevant markets are open.
  * XETRA (DAX): Mo-Fr 09:00–17:30 Europe/Berlin
  * NYSE/NASDAQ: Mo-Fr 15:30–22:00 Europe/Berlin (auto-adjusts for DST)
- * No holiday calendar — holidays treated as open (harmless: scan runs, finds nothing).
+ * Holiday calendar from IBKR liquidHours (populated at connect + daily 06:00 UTC).
  */
+
+import { getCalendar, formatDateForExchange } from "./trading-calendar.js";
 
 const TZ = "Europe/Berlin";
 
@@ -104,11 +106,26 @@ export function marketStatusLabel(now?: Date): string {
 }
 
 /**
- * Returns true on weekdays (Mon-Fri) in Europe/Berlin.
- * Weekday-only gate for daily info-sends. NO holiday calendar yet —
- * XETRA/NYSE holidays still report (see TODO: IBKR tradingHours integration).
+ * Returns true if at least one relevant market trades today.
+ * Checks IBKR holiday calendar first; falls back to weekday check if no data.
  */
 export function isTradingDay(now?: Date): boolean {
-  const { dayOfWeek } = getBerlinTime(now);
-  return dayOfWeek >= 1 && dayOfWeek <= 5;
+  const d = now ?? new Date();
+  const { dayOfWeek } = getBerlinTime(d);
+
+  // Weekend — independent of calendar
+  if (dayOfWeek === 0 || dayOfWeek === 6) return false;
+
+  // Calendar check: both exchanges CLOSED → not a trading day
+  const cal = getCalendar();
+  const nyseDate = formatDateForExchange("NYSE", d);
+  const xetraDate = formatDateForExchange("XETRA", d);
+  const nyseClosed = cal.isClosedOn("NYSE", nyseDate);
+  const xetraClosed = cal.isClosedOn("XETRA", xetraDate);
+
+  // Only skip if BOTH are known AND BOTH are CLOSED
+  if (nyseClosed === true && xetraClosed === true) return false;
+
+  // At least one exchange open, or no calendar data → treat as trading day
+  return true;
 }

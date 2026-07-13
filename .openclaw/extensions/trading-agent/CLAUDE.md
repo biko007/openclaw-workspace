@@ -99,3 +99,15 @@
 - **Daily Report C1:** Bei Paper-Account (IBKR dailyPnl=0) eigene Berechnung:
   `~dailyPnl = realizedPnlToday + (currentUnrealized - yesterdayUnrealized)`.
   `"~"` Präfix kennzeichnet berechneten Wert. Live-Account-Pfad unverändert.
+
+## IBKR-Feiertagskalender (ab 2026-07-13)
+
+- **Quelle:** `ContractDetails.liquidHours` aus `reqContractDetails` (Regular Session)
+- **Referenz-Symbole:** SPY (NYSE/NASDAQ, SMART, USD), SAP (XETRA, SMART, EUR)
+- **Parsing:** IBKR-Format `YYYYMMDD:HHMM-YYYYMMDD:HHMM;YYYYMMDD:CLOSED` → `Map<dateStr, DaySchedule>`
+- **Cache:** `globalThis.__tradingCalendar` (TradingCalendar Singleton), TTL 25h
+- **Refresh:** bei IBKR-Connect + Reconnect + taeglich 06:00 UTC
+- **Fail-safe:** kein Kalender-Eintrag → Fallback auf Wochentag-Check (identisch mit bisherigem Verhalten)
+- **Logik:** `isTradingDay()` gibt `false` nur wenn BEIDE Exchanges (NYSE + XETRA) CLOSED. Bei fehlenden Daten konservativ `true`.
+- **Dateien:** `trading-calendar.ts` (Parsing + Cache), `market-hours.ts` (isTradingDay), `ibkr.ts` (fetchLiquidHours), `index.ts` (Refresh-Orchestrierung)
+- **Tests:** `tests/trading-calendar.test.ts` (22 Tests: Parsing, Holiday, Half-Day, Fallback, Timezone)

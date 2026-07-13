@@ -1119,6 +1119,66 @@ export class IBKRConnection extends EventEmitter {
   }
 
   /**
+   * Fetch tradingHours and liquidHours for a contract via reqContractDetails.
+   * Used by the trading calendar to detect exchange holidays and half-days.
+   * Timeout 10s, same pattern as resolveContractId.
+   */
+  async fetchLiquidHours(
+    symbol: string,
+    exchange: string,
+    currency: string,
+  ): Promise<{ tradingHours?: string; liquidHours?: string }> {
+    if (!this.api || !this.isConnected()) {
+      throw new Error("IBKR not connected");
+    }
+    const reqId = this.nextReqId++;
+    const contract: Contract = {
+      symbol,
+      secType: SecType.STK,
+      exchange: exchange || "SMART",
+      currency: currency || "USD",
+    };
+
+    return new Promise<{ tradingHours?: string; liquidHours?: string }>((resolve, reject) => {
+      let done = false;
+      const timeout = setTimeout(() => {
+        if (done) return;
+        done = true;
+        cleanup();
+        reject(new Error(`fetchLiquidHours timeout for ${symbol}`));
+      }, 10_000);
+
+      const onDetails = (_id: number, details: ContractDetails) => {
+        if (_id !== reqId || done) return;
+        done = true;
+        clearTimeout(timeout);
+        cleanup();
+        resolve({
+          tradingHours: details.tradingHours,
+          liquidHours: details.liquidHours,
+        });
+      };
+
+      const onError = (_err: Error, code: number, id: number) => {
+        if (id !== reqId || done) return;
+        done = true;
+        clearTimeout(timeout);
+        cleanup();
+        reject(new Error(`fetchLiquidHours error for ${symbol}: code=${code} ${_err.message}`));
+      };
+
+      const cleanup = () => {
+        (this.api as any)?.removeListener("contractDetails", onDetails);
+        (this.api as any)?.removeListener("error", onError);
+      };
+
+      (this.api as any).on("contractDetails", onDetails);
+      (this.api as any).on("error", onError);
+      this.api!.reqContractDetails(reqId, contract);
+    });
+  }
+
+  /**
    * E5: Place BUY entry with fill-monitoring + automatic exit placement.
    * Handles partial fills (exit qty = cumQty from execDetails), timeout,
    * and gen-increment for subsequent partial fills.

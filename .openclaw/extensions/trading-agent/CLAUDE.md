@@ -111,3 +111,26 @@
 - **Logik:** `isTradingDay()` gibt `false` nur wenn BEIDE Exchanges (NYSE + XETRA) CLOSED. Bei fehlenden Daten konservativ `true`.
 - **Dateien:** `trading-calendar.ts` (Parsing + Cache), `market-hours.ts` (isTradingDay), `ibkr.ts` (fetchLiquidHours), `index.ts` (Refresh-Orchestrierung)
 - **Tests:** `tests/trading-calendar.test.ts` (22 Tests: Parsing, Holiday, Half-Day, Fallback, Timezone)
+
+## Meldungsdisziplin (ab 2026-09-18)
+
+- **ENV-Flags:** `HEALTH_REPORT_MODE`, `TRADING_REPORT_MODE` (Default beide `exception`)
+  - `exception` — Telegram nur bei Abweichung, Alles-OK-Tage bleiben still
+  - `always` — altes Verhalten (tägliche Nachricht auch ohne Befund)
+- **Prüfungen laufen unverändert täglich:** Health-Check 08:00 UTC, Report 18:00 UTC.
+  Gedrosselt ist nur der Versand — jedes Ergebnis landet im Ledger.
+- **Health-Abweichungen** (`healthDeviations()`): IBKR disconnected, `reconnectAttempts > 0`,
+  Universe-Scheduler gestoppt, `consecutiveWatchdogFailures > 0`
+- **Report-Abweichungen** (`reportDeviations()`): `tradingLocked`, `guardianLocked`,
+  IBKR disconnected, `reconnectAttempts > 0`, offene Alerts (`AlertManager.activeKeys()`),
+  offene Position ohne Exit-Coverage (`positions - stateCount.protected`),
+  Anomalie `buyDecisions > 0 && openedToday === 0` (bekannter 3-BUY/0-Eröffnungen-Fall)
+- **Bei Abweichung:** Kopfzeile „⚠️ … — Abweichung" + Bullet-Liste, darunter der
+  vollständige Report wie bisher.
+- **Ledger:** `artifacts/personal/trading/report-ledger.json` (60 Tage, ein Eintrag/Tag)
+- **`GET /weekly-stats`:** 7-Tage-Aggregat (Health grün/gesamt, Trades, Exits, P&L, NLV,
+  Abweichungsliste). Der executive-agent baut daraus die Montags-Nachricht — der
+  trading-agent sendet selbst KEINE Wochen-Zusammenfassung, damit genau eine rausgeht.
+- **Dateien:** `report-ledger.ts` (Ledger + reine Abweichungs-Funktionen),
+  `index.ts` (`sendHealthCheck`, `sendDailyReport`, `/weekly-stats`),
+  `alert-manager.ts` (`activeKeys()`)

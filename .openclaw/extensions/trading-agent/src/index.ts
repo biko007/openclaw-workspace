@@ -51,6 +51,13 @@ import {
   loadEarningsCache,
   type TradingStatus,
 } from "./store.js";
+import {
+  recordHealth,
+  recordReport,
+  weeklyStats,
+  healthDeviations,
+  reportDeviations,
+} from "./report-ledger.js";
 
 const PORT = 18793;
 const BIND = "127.0.0.1";
@@ -128,6 +135,13 @@ const apiClosedSymbols = new Set<string>(); // Dedup: API close wrote position_c
 // Set TRADE_EVENT_TELEGRAM=false in env to receive only daily summaries
 const TRADE_EVENT_TELEGRAM = (process.env.TRADE_EVENT_TELEGRAM ?? "true").toLowerCase() !== "false";
 console.log(`[trading-agent] TRADE_EVENT_TELEGRAM=${TRADE_EVENT_TELEGRAM}`);
+
+// Meldungsdisziplin (2026-09-18): "exception" = Telegram nur bei Abweichung,
+// "always" = altes Verhalten (tägliche Nachricht auch bei Alles-OK).
+// Die Prüfungen selbst laufen in beiden Modi täglich.
+const HEALTH_REPORT_MODE = (process.env.HEALTH_REPORT_MODE ?? "exception").toLowerCase();
+const TRADING_REPORT_MODE = (process.env.TRADING_REPORT_MODE ?? "exception").toLowerCase();
+console.log(`[trading-agent] HEALTH_REPORT_MODE=${HEALTH_REPORT_MODE} TRADING_REPORT_MODE=${TRADING_REPORT_MODE}`);
 
 // ── Guardian state (E4) ──
 const GUARDIAN_CONFIG: GuardianConfig = {
@@ -670,8 +684,41 @@ async function sendDailyReport(): Promise<void> {
     decisions.length > 0 ? `KI-Entscheidungen heute: ${buyDecisions} BUY / ${skipDecisions} SKIP` : "",
   ].filter(Boolean).join("\n");
 
-  console.log(`[trading-agent] Sending daily report for ${today}`);
-  await sendTelegramNotification(msg);
+  // ── Meldungsdisziplin: Abweichungen bestimmen ──
+  const deviations = reportDeviations({
+    tradingLocked: tracker.tradingLocked,
+    guardianLocked: ibkr.guardianLocked,
+    connected: ibkr.isConnected(),
+    reconnectAttempts: ibkr.reconnectAttempts,
+    activeAlerts: alertManager.activeKeys(),
+    positionCount: lastClassification?.positions.length ?? 0,
+    protectedCount: lastClassification?.stateCount["protected"] ?? 0,
+    hasClassification: !!lastClassification,
+    buyDecisions,
+    openedToday: todayOrderCount,
+  });
+
+  recordReport(today, {
+    ok: deviations.length === 0,
+    deviations,
+    trades: todayOrderCount,
+    exits: todayExitCount,
+    dailyPnl: displayDailyPnl,
+    netLiquidation: status.netLiquidation,
+    buyDecisions,
+  });
+
+  if (deviations.length === 0 && TRADING_REPORT_MODE !== "always") {
+    console.log(`[trading-agent] Daily report ${today} OK — kein Telegram (Meldungsdisziplin)`);
+    return;
+  }
+
+  const out = deviations.length > 0
+    ? [`⚠️ *Trading-Report — Abweichung*`, ``, ...deviations.map((d) => `• ${d}`), ``, msg].join("\n")
+    : msg;
+
+  console.log(`[trading-agent] Sending daily report for ${today} (deviations=${deviations.length})`);
+  await sendTelegramNotification(out);
 }
 
 // ── Watchdog ──
@@ -854,8 +901,35 @@ async function sendHealthCheck(): Promise<void> {
     `Net Liquidation: $${status.netLiquidation.toFixed(0)}`,
   ].join("\n");
 
-  console.log("[trading-agent] Sending daily health check");
-  await sendTelegramNotification(msg);
+  // ── Meldungsdisziplin: Abweichungen bestimmen ──
+  const schedulerRunning = universeManager.isScheduleRunning();
+  const deviations = healthDeviations({
+    connected,
+    reconnectAttempts: ibkr.reconnectAttempts,
+    schedulerRunning,
+    watchdogFailures: consecutiveWatchdogFailures,
+  });
+
+  recordHealth(new Date().toISOString().slice(0, 10), {
+    ok: deviations.length === 0,
+    deviations,
+    connected,
+    reconnectAttempts: ibkr.reconnectAttempts,
+    schedulerRunning,
+    watchdogFailures: consecutiveWatchdogFailures,
+  });
+
+  if (deviations.length === 0 && HEALTH_REPORT_MODE !== "always") {
+    console.log("[trading-agent] Daily health check OK — kein Telegram (Meldungsdisziplin)");
+    return;
+  }
+
+  const out = deviations.length > 0
+    ? [`⚠️ *Trading Health-Check — Abweichung*`, ``, ...deviations.map((d) => `• ${d}`), ``, msg].join("\n")
+    : msg;
+
+  console.log(`[trading-agent] Sending daily health check (deviations=${deviations.length})`);
+  await sendTelegramNotification(out);
 }
 
 // ── Express ──
@@ -874,6 +948,16 @@ app.get("/ready", (_req, res) => {
 
 app.get("/version", (_req, res) => {
   res.json({ service: "trading-agent", node: process.version, uptime: process.uptime() });
+});
+
+// Meldungsdisziplin: Wochen-Kennzahlen für die Montags-Zusammenfassung
+// (gesendet von executive-agent, damit genau EINE Nachricht rausgeht).
+app.get("/weekly-stats", (_req, res) => {
+  try {
+    res.json({ ok: true, ...weeklyStats() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
 });
 
 app.get("/status", (_req, res) => {

@@ -132,4 +132,15 @@ export class AlertManager {
   isActive(key: string): boolean {
     return this.state.get(key)?.active ?? false;
   }
+
+  /**
+   * All currently active alert keys (Meldungsdisziplin: Abweichungs-Erkennung).
+   */
+  activeKeys(): string[] {
+    const keys: string[] = [];
+    for (const [key, entry] of this.state) {
+      if (entry.active) keys.push(key);
+    }
+    return keys;
+  }
 }

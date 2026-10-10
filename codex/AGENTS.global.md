@@ -73,6 +73,12 @@ to the other area in the same session.
    `CRITICAL` / `HIGH` / `MEDIUM` / `LOW`. Include concrete `file:line`
    references where possible.
 
+## Task Output Protocol
+
+Codex writes all audit results to ONE file: `~/codex-audit/<area>/<date>-<type>.md`.
+Terminal output is ONLY: `DONE → <path>`. No result content, no diffs, no logs to stdout.
+Secrets NEVER go to stdout, logs, or report files (reinforces Hard Rule 3).
+
 ## Project Naming Canon
 
 ```

@@ -1,23 +1,40 @@
 # MEMORY.md
 
-## User profile (curated)
+Projekt- und Entscheidungsgedächtnis. **Keine Personen- oder Familienangaben** —
+die stehen ausschließlich in `~/.openclaw/owner-facts.md` (SSOT, vom Owner
+gepflegt) und werden von dort automatisch injiziert.
+Zuschnitt vom 2026-10-10 auf Owner-Entscheidung.
 
-- Name/preferred address: biko
-- Timezone: UTC
-- Preference (2026-02-17): store useful context proactively with judgment.
-- Owner-Profil (owner-facts.md) wird automatisch via before_agent_start-Hook injiziert. Es ist die SSOT für dauerhafte Fakten über Jürgen Otto Bickel (verifiziert 2026-07-01). Zusätzliche Fakten werden automatisch über das Memory-System (owner_memory) gelernt und injiziert. owner-facts.md wird NUR vom Owner gepflegt, NIEMALS vom Agenten geschrieben, erstellt oder kopiert.
-- High-signal owner facts from the SSOT: address as "Herr Bickel"; keep answers executive-style, short, precise, and in German without unnecessary anglicisms; ask when unclear instead of guessing; do not position him as an investor; core positioning is strategist and innovator.
-- Family facts from the SSOT: Jürgen Otto Bickel is not married; life partner is Claudia Link; divorced for over 20 years; ex-wife Alicia Carioni; son Félix Otto Bickel Carioni; stepdaughters are Lea Link (born 2001-12-29) and Olivia Link (born 2000-07-25).
+## Quellen und Mechanik
 
-## Professional context
+- `owner-facts.md` ist die SSOT für dauerhafte Fakten über den Owner (verifiziert
+  2026-07-01). Sie wird über den `before_prompt_build`-Hook injiziert; der frühere
+  `before_agent_start`-Hook ist in OpenClaw 2026.9.1 entfernt.
+- Zusätzliche Fakten werden automatisch über das Memory-System (`owner_memory`)
+  gelernt und injiziert. Keine manuelle Workspace-Pflege nötig.
+- `owner-facts.md` wird NUR vom Owner gepflegt, NIEMALS vom Agenten geschrieben,
+  erstellt oder kopiert.
 
-- User shared updated professional bio (2026-02-17); owner-facts.md supersedes older details where different:
-  - Jürgen Bickel is named co-founder of STORZ & BICKEL (Tuttlingen, Germany).
-  - Per owner-facts.md, he officially left STORZ & BICKEL GmbH on 2026-05-31; last active day was 2026-03-31.
-  - STORZ & BICKEL is known for the VOLCANO device, described by user as the first medically certified cannabis vaporizer worldwide.
-  - Company has 25+ years in the industry and is positioned as a pioneer/world market leader.
+## Arbeitsvorgaben (Kurzfassung, Quelle: owner-facts.md / OWNER_PROFILE.md)
 
-## Notes
+- Anrede „Herr Bickel".
+- Antworten im Executive-Stil: kurz, präzise, Ergebnis zuerst, auf Deutsch.
+  Englische Fachbegriffe sind ausdrücklich in Ordnung.
+- Nicht raten, wo BIKO_CORE §7 eine Rückfrage vorsieht — sonst autonom
+  weiterarbeiten.
+- Den Owner nicht als Investor positionieren; Kernpositionierung ist Strategie
+  und Innovation.
 
-- User shared an older CV; treat as historical background, prefer newer bio details for current context.
-- Volatile Fakten (z. B. Rasenmäher-Name) werden automatisch über owner_memory gelernt und injiziert — keine manuelle Workspace-Pflege nötig.
+## Projektkontext
+
+- Aktive Projekte: BikosOpenClaw (bikosoc) und HDCC.
+- Zielarchitektur: pragmatischer modularer Monolith auf einem Hetzner-VPS;
+  zusätzliche Infrastruktur nur bei eindeutigem Nutzen.
+- Beruflicher Hintergrund in Kurzform: Mitgründer von STORZ & BICKEL
+  (Tuttlingen); Austritt aus der STORZ & BICKEL GmbH zum 2026-05-31. Details und
+  alles Weitere: `owner-facts.md`.
+
+## Notizen
+
+- Ein älterer Lebenslauf liegt als historischer Hintergrund vor; für den
+  aktuellen Kontext gelten die neueren Angaben aus `owner-facts.md`.

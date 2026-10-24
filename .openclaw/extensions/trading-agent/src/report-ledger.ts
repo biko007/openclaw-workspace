@@ -86,6 +86,18 @@ export interface ReportInputs {
   openedToday: number;
 }
 
+/**
+ * BUY-Entscheidungen, die der Executor ausführen darf (Konfidenz ≥ Schwelle,
+ * wie shouldExecuteTrade). Vorher zählte der Report jedes BUY — auch 0,72 —
+ * und meldete täglich eine falsche Anomalie (Auftrag Option A, 24.10.2026).
+ */
+export function approvedBuyCount(
+  decisions: readonly { decision: string; confidence: number }[],
+  threshold: number,
+): number {
+  return decisions.filter((d) => d.decision === "BUY" && d.confidence >= threshold).length;
+}
+
 /** Abweichungen des täglichen Trading-Reports. Leer = alles OK. */
 export function reportDeviations(i: ReportInputs): string[] {
   const out: string[] = [];
@@ -98,10 +110,11 @@ export function reportDeviations(i: ReportInputs): string[] {
     const uncovered = i.positionCount - i.protectedCount;
     if (uncovered > 0) out.push(`${uncovered} offene Position(en) ohne Exit-Coverage`);
   }
-  // Anomalie: KI entscheidet BUY, es wird aber keine Position eröffnet
-  // (bekannter 3-BUY/0-Eröffnungen-Fall)
+  // Anomalie: KI gibt BUY frei (Konfidenz ≥ Schwelle), es wird aber keine
+  // Position eröffnet. buyDecisions zählt nur freigegebene BUYs
+  // (approvedBuyCount) — BUY unter der Schwelle ist ein gewolltes SKIP.
   if (i.buyDecisions > 0 && i.openedToday === 0) {
-    out.push(`Anomalie: ${i.buyDecisions} BUY-Entscheidung(en), 0 Eröffnungen`);
+    out.push(`Anomalie: ${i.buyDecisions} freigegebene BUY-Entscheidung(en), 0 Eröffnungen`);
   }
   return out;
 }

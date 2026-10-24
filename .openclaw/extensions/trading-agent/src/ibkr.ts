@@ -153,6 +153,19 @@ type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
 const BACKOFF_STEPS = [5_000, 10_000, 30_000, 60_000, 120_000];
 
+/**
+ * IBKR execution.time → epoch ms (UTC). Formate „YYYYMMDD-HH:MM:SS" bzw.
+ * „YYYYMMDD  HH:MM:SS" ohne oder mit Zeitzone UTC/GMT. Andere Zeitzonen →
+ * null (der Kurs wird dann nicht verwendet, die Meldung gilt als geschätzt).
+ */
+export function parseExecTimeUtc(raw: unknown): number | null {
+  if (typeof raw !== "string") return null;
+  const m = /^(\d{4})(\d{2})(\d{2})[-\s]+(\d{2}):(\d{2}):(\d{2})(?:\s+(\S+))?$/.exec(raw.trim());
+  if (!m) return null;
+  if (m[7] && !["UTC", "GMT", "Etc/UTC", "Etc/GMT"].includes(m[7])) return null;
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+}
+
 export class IBKRConnection extends EventEmitter {
   private api: IBApi | null = null;
   private host: string;
@@ -170,6 +183,8 @@ export class IBKRConnection extends EventEmitter {
   private _guardianLocked = false;
   private _reconnectCooldownUntil = 0;
   private _lastExecSyncTime: string | null = null;
+  /** Zuletzt gesehene Ausführungen (alle Clients), für den echten Kurs der Glattstellungs-Meldung */
+  private _recentExecs = new Map<string, { symbol: string; side: string; shares: number; price: number; at: number }>();
 
   constructor() {
     super();
@@ -251,6 +266,9 @@ export class IBKRConnection extends EventEmitter {
     if (execution.orderId) {
       this._sequencer.trackSeenId(execution.orderId);
     }
+    // Nur Live-Ausführungen (reqId -1) mit Empfangszeit; Nachlieferungen aus
+    // reqExecutions merkt _collectExecutions mit ihrer echten Ausführungszeit
+    if (reqId === -1) this._rememberExec(contract.symbol, execution, Date.now());
     // Populate orderIdToRef from execution.orderRef
     if (execution.orderId && execution.orderRef && isOwnOrderRef(execution.orderRef)) {
       this._orderIdToRef.set(execution.orderId, execution.orderRef);
@@ -789,6 +807,10 @@ export class IBKRConnection extends EventEmitter {
 
       const onExecDetails = (id: number, contract: Contract, execution: any) => {
         if (id !== reqId) return;
+        // Nachlieferung (Reconnect): Zeitpunkt aus execution.time, sonst nicht
+        // merken — ein älterer Verkauf darf nicht als „gerade eben" gelten
+        const at = parseExecTimeUtc(execution.time);
+        if (at !== null) this._rememberExec(contract.symbol, execution, at);
         executions.push({
           orderId: execution.orderId ?? 0,
           symbol: contract.symbol ?? "",
@@ -875,6 +897,38 @@ export class IBKRConnection extends EventEmitter {
       this.api!.on(EventName.completedOrdersEnd, onEnd);
       (this.api as any).reqCompletedOrders(true);
     });
+  }
+
+  private _rememberExec(
+    symbol: string | undefined,
+    execution: { execId?: string; side?: string; shares?: number; price?: number },
+    at: number,
+  ): void {
+    if (!symbol || !execution.execId || !(execution.shares && execution.shares > 0) || !(execution.price && execution.price > 0)) return;
+    const now = Date.now();
+    // Korrektur von IBKR: gleiche execId-Basis, höherer Suffix ersetzt den alten Eintrag
+    const lastDot = execution.execId.lastIndexOf(".");
+    const base = lastDot > 0 ? execution.execId.substring(0, lastDot) : execution.execId;
+    this._recentExecs.set(base, { symbol, side: execution.side ?? "", shares: execution.shares, price: execution.price, at });
+    for (const [k, v] of this._recentExecs) {
+      if (now - v.at > 6 * 60 * 60 * 1000) this._recentExecs.delete(k);
+    }
+  }
+
+  /**
+   * Durchschnittlicher Verkaufskurs (SLD) eines Symbols aus den Ausführungen
+   * der letzten withinMs, gewichtet nach Stückzahl. null = keine bekannt.
+   */
+  recentSellPrice(symbol: string, withinMs: number): number | null {
+    const cutoff = Date.now() - withinMs;
+    let shares = 0;
+    let value = 0;
+    for (const e of this._recentExecs.values()) {
+      if (e.symbol !== symbol || e.side !== "SLD" || e.at < cutoff) continue;
+      shares += e.shares;
+      value += e.shares * e.price;
+    }
+    return shares > 0 ? value / shares : null;
   }
 
   private _formatExecTime(d: Date, startOfDay = false): string {

@@ -7,6 +7,9 @@
  *   CRITICAL — every occurrence sent to Telegram
  *
  * State is in-memory only, resets on restart.
+ *
+ * Telegram-Stummschaltung (Paper-Account): über den übergebenen Sender in
+ * index.ts (TRADING_ALERTS_TELEGRAM), nicht hier.
  */
 
 export type Severity = "INFO" | "WARN" | "CRITICAL";
@@ -22,9 +25,6 @@ interface AlertState {
 }
 
 const DEDUP_WINDOW = 60 * 60 * 1000; // 60 minutes
-
-// Paper-Account, Phase 3 gesperrt — reaktivieren beim Live-Cutover
-const TRADING_ALERTS_TELEGRAM = false;
 
 type TelegramSender = (text: string) => Promise<void>;
 
@@ -64,11 +64,7 @@ export class AlertManager {
         ? `\n_(${entry.suppressedCount}x unterdrückt seit letztem Alert)_`
         : "";
       console.log(`[alert] CRITICAL ${key}: ${message}`);
-      if (TRADING_ALERTS_TELEGRAM) {
-        await this.sendTelegram(message + suffix);
-      } else {
-        console.log(`[alert-muted] CRITICAL ${key}: ${message}`);
-      }
+      await this.sendTelegram(message + suffix);
       entry.lastSentAt = now;
       entry.suppressedCount = 0;
       entry.sentDuringCurrentActivation = true;
@@ -88,11 +84,7 @@ export class AlertManager {
       ? `\n_(${entry.suppressedCount}x in der letzten Stunde)_`
       : "";
     console.log(`[alert] WARN ${key}: ${message}`);
-    if (TRADING_ALERTS_TELEGRAM) {
-      await this.sendTelegram(message + suffix);
-    } else {
-      console.log(`[alert-muted] WARN ${key}: ${message}`);
-    }
+    await this.sendTelegram(message + suffix);
     entry.lastSentAt = now;
     entry.suppressedCount = 0;
     entry.sentDuringCurrentActivation = true;
@@ -118,11 +110,7 @@ export class AlertManager {
       const suffix = suppressed > 0 ? ` (${suppressed}x unterdrückt)` : "";
       const msg = `✅ *Alert behoben:* ${key}${suffix}`;
       console.log(`[alert] RESOLVED ${key}`);
-      if (TRADING_ALERTS_TELEGRAM) {
-        await this.sendTelegram(msg);
-      } else {
-        console.log(`[alert-muted] RESOLVED ${key}: ${msg}`);
-      }
+      await this.sendTelegram(msg);
     }
   }
 

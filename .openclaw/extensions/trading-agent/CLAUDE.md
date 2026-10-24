@@ -63,7 +63,7 @@
 
 | Check | Beschreibung |
 |-------|-------------|
-| 1 — IBKR-Verbindung | 3 aufeinanderfolgende Failures → automatischer Gateway-Restart (`systemctl --user restart openclaw-ibkr-gateway`) |
+| 1 — IBKR-Verbindung | 3 aufeinanderfolgende Failures → automatischer Gateway-Restart (`systemctl --user restart ibgateway.service`) |
 | 2 — Scan-Staleness | >10min seit letztem Scan-Ergebnis, mit 20min Grace nach Market-Open. **Debounce:** erst nach 3 aufeinanderfolgenden stale-Beobachtungen (≈15min bei 5min-Intervall) |
 | 3 — Scheduler-Status | WARN wenn Universe-Scheduler gestoppt |
 | 4 — Exit-Coverage | `exits_incomplete`: WARN → CRITICAL nach 15min. `qty_undercoverage`: **Grace 90s** — erst nach persistenter Unterdeckung alarmieren, transiente Zustände (Reconnect/Order-Settling) werden geschluckt |
@@ -80,7 +80,7 @@
 
 - **ENV-Flag:** `TRADE_EVENT_TELEGRAM` (Default: `true`)
 - **`false`:** Unterdrückt individuelle Trade-Notifications (Position closed, Exit-Fill, Manual Close)
-- **Ungegated:** Daily Report, Daily Health Check, CRITICAL-Alerts, Guardian-Alerts (eigenes `TRADING_ALERTS_TELEGRAM`)
+- **Ungegated:** Daily Report, Daily Health Check, CRITICAL-Alerts, Guardian-Alerts (eigenes `TRADING_ALERTS_TELEGRAM` in `index.ts`, wirkt auf den Sender des AlertManagers)
 - Gate-Points: `onPositionClosed()`, `POST /close/:symbol`, Exit-Fill Callback
 
 ## Daily-Report-Fixes (ab 2026-07-03)
@@ -134,3 +134,26 @@
 - **Dateien:** `report-ledger.ts` (Ledger + reine Abweichungs-Funktionen),
   `index.ts` (`sendHealthCheck`, `sendDailyReport`, `/weekly-stats`),
   `alert-manager.ts` (`activeKeys()`)
+
+## Börsenzeiten und Option A (ab 2026-10-24)
+
+- **`market-hours.ts`** ist die einzige Quelle für Handelszeiten: XETRA 09:00–17:30
+  Europe/Berlin, NYSE 09:30–16:00 America/New_York, je Börse in ihrer Zeitzone
+  (Sommer-/Winterzeit automatisch), Wochenende geschlossen, IBKR-Kalender
+  (CLOSED, verkürzter Tag) darf das Fenster nur verkürzen, nie verlängern.
+- **Executor:** KI-Aufruf und Order nur, wenn die Börse des Symbols offen ist
+  (`isExchangeOpen`). **Scheduler:** Scans nur, wenn XETRA oder NYSE offen ist;
+  Universe-Build 07:00 UTC nur an Handelstagen. **`isMarketSafe`:** erste 15 /
+  letzte 30 Minuten relativ zur jeweiligen Börsenzeit.
+- **Nachweis:** Log `[market-hours] YYYY-MM-DD: XETRA hh:mm–hh:mm UTC, NYSE …`
+  bei jedem Kalender-Refresh; `GET /market-hours?date=YYYY-MM-DD`.
+- **Anomalie im Daily Report** zählt nur freigegebene BUYs (Konfidenz ≥
+  `CONFIDENCE_THRESHOLD`).
+- **Status:** `unrealizedPnl` = 0 ohne Position.
+- **Glattstellungs-Meldung (sentinel):** Position muss in zwei Abfragen
+  hintereinander fehlen; je Position (Symbol, Menge, Einstand) nur eine Meldung;
+  Kurs aus IBKR-Executions (`ibkr.recentSellPrice`), sonst „(geschätzt)“ und
+  `estimated: true` im `position_closed`-Event.
+- **`GET /orders`:** Alt-Orders aus `orders.jsonl` mit offenem Status, die bei
+  IBKR nicht offen sind, erscheinen als `NotAtIBKR` (`logStatus` = Original).
+  Das Log bleibt unverändert.

@@ -24,6 +24,7 @@ import {
   type ScanDebugStats,
 } from "./indicators.js";
 import { getBlockedSymbols, getPostEarningsSymbols } from "./earnings-calendar.js";
+import { isExchangeOpen, isMarketOpen, isTradingDay, marketStatusLabel } from "./market-hours.js";
 
 const INDEX_SCANNER_CONFIG: Record<string, { locationCode: string; currency: string }> = {
   DAX40: { locationCode: "STK.EU.IBIS-XETRA", currency: "EUR" },
@@ -430,10 +431,15 @@ export class UniverseManager {
     const utcHour = now.getUTCHours();
     const utcMin = now.getUTCMinutes();
 
-    // Daily universe build at 07:00 UTC
+    // Daily universe build at 07:00 UTC — nur an Handelstagen (kein Wochenende,
+    // kein Feiertag beider Börsen)
     if (utcHour === 7 && this.lastBuildHour !== utcHour) {
       this.lastBuildHour = utcHour;
-      await this.buildActiveUniverse();
+      if (isTradingDay(now)) {
+        await this.buildActiveUniverse();
+      } else {
+        console.log(`[universe] Universe build skipped: kein Handelstag (${marketStatusLabel(now)})`);
+      }
     }
 
     // Reset at midnight
@@ -441,11 +447,10 @@ export class UniverseManager {
       this.lastBuildHour = -1;
     }
 
-    // Intraday scans during market hours (Yahoo Finance doesn't need IBKR connection)
-    const euOpen = utcHour >= 7 && (utcHour < 15 || (utcHour === 15 && utcMin <= 30));
-    const usOpen = utcHour >= 14 && (utcHour < 21 || (utcHour === 20 && utcMin <= 59));
-    const marketOpen = euOpen || usOpen;
-    if (!marketOpen) return;
+    // Intraday scans only while XETRA or NYSE is open (weekday, holiday,
+    // local hours incl. DST — market-hours.ts). Vorher feste UTC-Fenster
+    // ohne Wochentag: Scans auch am Wochenende.
+    if (!isMarketOpen(now)) return;
 
     // Market safety check (risk-off filter + trading hours)
     const safety = await isMarketSafe();
@@ -506,11 +511,7 @@ export class UniverseManager {
   }
 
   isMarketOpen(market: "EU" | "US"): boolean {
-    const now = new Date();
-    const utcHour = now.getUTCHours();
-    const utcMin = now.getUTCMinutes();
-    if (market === "EU") return utcHour >= 7 && (utcHour < 15 || (utcHour === 15 && utcMin <= 30));
-    return utcHour >= 14 && utcHour < 21;
+    return isExchangeOpen(market === "EU" ? "XETRA" : "NYSE");
   }
 
   getTopCandidates(limit = 10): ScanResult[] {

@@ -128,6 +128,8 @@ export interface PositionClosedEvent extends OrderEventBase {
   pnl: number;
   pnlPercent: number;
   source: "manual" | "sentinel";
+  /** true = kein IBKR-Ausführungskurs, exitPrice/pnl aus dem letzten Marktpreis */
+  estimated?: boolean;
 }
 
 export type OrderEvent =

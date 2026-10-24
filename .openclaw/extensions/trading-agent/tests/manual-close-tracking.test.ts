@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -16,11 +16,17 @@ import {
 
 let tmpDir: string;
 
+// Die Testdaten tragen feste Zeitstempel vom 01./02.07.2026, die Abfragen
+// aber relative Fenster (sinceDays: 7). Ab 09.07.2026 fielen die Daten aus dem
+// Fenster und 8 Tests wurden rot, ohne dass sich der Code änderte.
+// Deshalb läuft die Uhr hier fest am 03.07.2026 (nur Date, keine Timer).
 beforeEach(() => {
+  vi.useFakeTimers({ now: new Date("2026-07-03T12:00:00.000Z"), toFake: ["Date"] });
   tmpDir = mkdtempSync(join(tmpdir(), "mct-test-"));
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -337,8 +343,8 @@ describe("computed dailyPnl", () => {
 
   it("computed dailyPnl = realized + unrealized delta", () => {
     // Simulate the computation logic from sendDailyReport
-    const ibkrDailyPnl = 0; // Paper account returns 0
-    const realizedPnlToday = 833.32; // From position_closed events
+    const ibkrDailyPnl: number = 0; // Paper account returns 0
+    const realizedPnlToday: number = 833.32; // From position_closed events
     const currentUnrealized = 500; // Current positions unrealized
     const prevUnrealized = 300; // Yesterday's unrealized from performance
     const unrealizedDelta = currentUnrealized - prevUnrealized; // +200
@@ -359,7 +365,7 @@ describe("computed dailyPnl", () => {
   });
 
   it("uses IBKR value when non-zero (live account path unchanged)", () => {
-    const ibkrDailyPnl = 1500.50; // Live account returns real value
+    const ibkrDailyPnl: number = 1500.50; // Live account returns real value
     const realizedPnlToday = 833.32;
 
     let displayDailyPnl = ibkrDailyPnl;

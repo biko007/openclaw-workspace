@@ -27,7 +27,9 @@ import {
   daysUntilEarnings,
   hasEarningsSoon,
 } from "./earnings-calendar.js";
-import { isMarketOpen, marketStatusLabel, isTradingDay } from "./market-hours.js";
+import { isMarketOpen, marketStatusLabel, isTradingDay, tradingWindowsUtc, tradingWindowsLabel } from "./market-hours.js";
+import { CONFIDENCE_THRESHOLD } from "./ai-decision.js";
+import { unrealizedPnlFor, positionKey, sentinelCloseValues, legacyOrdersForDisplay } from "./status-helpers.js";
 import { getCalendar } from "./trading-calendar.js";
 import { AlertManager } from "./alert-manager.js";
 import { checkExitCoverage } from "./watchdog-metrics.js";
@@ -57,6 +59,7 @@ import {
   weeklyStats,
   healthDeviations,
   reportDeviations,
+  approvedBuyCount,
 } from "./report-ledger.js";
 
 const PORT = 18793;
@@ -118,11 +121,21 @@ const eventLog = new DurableEventLog(EVENT_LOG_PATH);
 const tracker = new OrderStateTracker(eventLog);
 
 const universeManager = new UniverseManager(ibkr);
-const alertManager = new AlertManager(sendTelegramNotification);
+// Paper-Account, Phase 3 gesperrt — reaktivieren beim Live-Cutover.
+// Die Stummschaltung sitzt hier am Sender statt im AlertManager, damit dessen
+// Dedup-/Resolve-Logik testbar bleibt (Auftrag Option A, 24.10.2026).
+const TRADING_ALERTS_TELEGRAM = false;
+const alertManager = new AlertManager(
+  TRADING_ALERTS_TELEGRAM
+    ? sendTelegramNotification
+    : async (text: string) => { console.log(`[alert-muted] ${text}`); },
+);
 const executor = new OrderExecutor(ibkr, () => currentStatus, sendTelegramNotification, tracker, alertManager);
 let currentStatus: TradingStatus = loadStatus();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let previousPositionSymbols = new Map<string, Position>(); // track for close detection
+const pendingCloses = new Map<string, { pos: Position; misses: number }>(); // fehlt seit n Abfragen
+const reportedCloses = new Set<string>(); // positionKey — je Position nur eine Glattstellungs-Meldung
 let lastReportDay = currentStatus.lastReportDay ?? -1;
 let lastHealthCheckDay = currentStatus.lastHealthCheckDay ?? -1;
 let lastEarningsRefreshDay = currentStatus.lastEarningsRefreshDay ?? -1;
@@ -240,6 +253,15 @@ async function refreshTradingCalendar(): Promise<void> {
       console.warn(`[calendar] ${ref.exchange} refresh failed:`, e instanceof Error ? e.message : e);
     }
   }
+  logTradingWindows();
+}
+
+/** Börsenzeiten in UTC für heute und die nächsten 3 Tage (Nachweis Zeitfenster). */
+function logTradingWindows(): void {
+  for (let i = 0; i < 4; i++) {
+    const day = new Date(Date.now() + i * 86_400_000).toISOString().slice(0, 10);
+    console.log(`[market-hours] ${tradingWindowsLabel(day)}`);
+  }
 }
 
 // ── Polling ──
@@ -262,9 +284,6 @@ async function pollIBKR(): Promise<void> {
     account!.cashBalance === 0 &&
     positions.length > 0;
 
-  // Compute unrealized P&L from enriched positions as fallback
-  const positionPnl = positions.reduce((sum, p) => sum + p.unrealizedPnl, 0);
-
   currentStatus = {
     ...currentStatus,
     connected,
@@ -272,9 +291,11 @@ async function pollIBKR(): Promise<void> {
     account: ibkr.getAccount() || currentStatus.account,
     positions,
     dailyPnl: hasFreshAccount ? account!.dailyPnl : currentStatus.dailyPnl,
-    unrealizedPnl: hasFreshAccount && account!.unrealizedPnl !== 0
-      ? account!.unrealizedPnl
-      : positionPnl || currentStatus.unrealizedPnl,
+    unrealizedPnl: unrealizedPnlFor(
+      positions,
+      hasFreshAccount ? account!.unrealizedPnl : null,
+      currentStatus.unrealizedPnl,
+    ),
     realizedPnl: hasFreshAccount ? account!.realizedPnl : currentStatus.realizedPnl,
     netLiquidation:
       hasFreshAccount && !suspiciousZeroSnapshot
@@ -291,15 +312,38 @@ async function pollIBKR(): Promise<void> {
   if (connected) recordDailyPerformance(currentStatus);
 
   // ── Position Close Detection ──
-  if (connected && previousPositionSymbols.size > 0) {
+  // Eine Position gilt erst als geschlossen, wenn sie in zwei aufeinander-
+  // folgenden Abfragen fehlt (nach Reconnect kommen kurz leere Positionen —
+  // SO/DUK wurden im Juli/August je 4–5× als geschlossen gemeldet), und jede
+  // Position (Symbol, Menge, Einstand) wird nur einmal gemeldet.
+  if (connected) {
     const currentSymbols = new Set(positions.map((p) => p.symbol));
+    // Noch (oder wieder) vorhandene Position ist nicht geschlossen: eine frühere
+    // Meldung war falsch, die echte Glattstellung später muss gemeldet werden
+    for (const p of positions) reportedCloses.delete(positionKey(p));
     for (const [symbol, prevPos] of previousPositionSymbols) {
-      if (!currentSymbols.has(symbol)) {
-        // Position closed — send notification
-        notifyPositionClosed(symbol, prevPos).catch((e) =>
-          console.log("[trading-agent] Close notification error:", e instanceof Error ? e.message : e),
-        );
+      if (!currentSymbols.has(symbol) && !pendingCloses.has(symbol)) {
+        pendingCloses.set(symbol, { pos: prevPos, misses: 0 });
       }
+    }
+    for (const [symbol, pending] of pendingCloses) {
+      if (currentSymbols.has(symbol)) {
+        pendingCloses.delete(symbol);
+        console.log(`[trading-agent] ${symbol} wieder in den Positionen — keine Glattstellung`);
+        continue;
+      }
+      pending.misses++;
+      if (pending.misses < 2) continue;
+      pendingCloses.delete(symbol);
+      const key = positionKey(pending.pos);
+      if (reportedCloses.has(key)) {
+        console.log(`[trading-agent] Glattstellung ${symbol} bereits gemeldet (${key}) — keine zweite Meldung`);
+        continue;
+      }
+      reportedCloses.add(key);
+      notifyPositionClosed(symbol, pending.pos).catch((e) =>
+        console.log("[trading-agent] Close notification error:", e instanceof Error ? e.message : e),
+      );
     }
   }
   // Update tracked positions
@@ -428,9 +472,12 @@ async function notifyPositionClosed(symbol: string, lastKnown: Position): Promis
     else if (lastExit?.orderType === "LMT" && lastExit.parentOrderId) closeReason = "Take-Profit";
   }
 
-  // P&L calculation
-  const pnl = lastKnown.unrealizedPnl || (lastKnown.marketPrice - lastKnown.avgCost) * lastKnown.quantity;
-  const pnlPct = entryPrice > 0 ? ((lastKnown.marketPrice - entryPrice) / entryPrice) * 100 : 0;
+  // P&L: echter Ausführungskurs aus den IBKR-Executions der letzten 15 min;
+  // ohne ihn aus dem letzten Marktpreis, als geschätzt gekennzeichnet
+  const close = sentinelCloseValues(lastKnown, entryPrice, ibkr.recentSellPrice(symbol, 15 * 60_000));
+  const pnl = close.pnl;
+  const pnlPct = close.pnlPercent;
+  const est = close.estimated ? " (geschätzt)" : "";
 
   // Hold duration
   let holdDuration = "";
@@ -450,13 +497,13 @@ async function notifyPositionClosed(symbol: string, lastKnown: Position): Promis
     `${emoji} *Trade geschlossen*`,
     ``,
     `*${symbol}* — ${closeReason}`,
-    `Entry: $${entryPrice.toFixed(2)} → Exit: $${lastKnown.marketPrice.toFixed(2)}`,
-    `P&L: ${pnlSign}$${pnl.toFixed(2)} (${pnlSign}${pnlPct.toFixed(1)}%)`,
+    `Entry: $${entryPrice.toFixed(2)} → Exit: $${close.exitPrice.toFixed(2)}${est}`,
+    `P&L${est}: ${pnlSign}$${pnl.toFixed(2)} (${pnlSign}${pnlPct.toFixed(1)}%)`,
     holdDuration ? `Haltedauer: ${holdDuration}` : "",
     `Menge: ${lastKnown.quantity} Stk`,
   ].filter(Boolean).join("\n");
 
-  console.log(`[trading-agent] Position closed: ${symbol} | P&L: ${pnlSign}$${pnl.toFixed(2)} | ${closeReason}`);
+  console.log(`[trading-agent] Position closed: ${symbol} | P&L${est}: ${pnlSign}$${pnl.toFixed(2)} | ${closeReason}`);
   if (TRADE_EVENT_TELEGRAM) await sendTelegramNotification(msg);
 
   // Write position_closed event for daily report tracking (sentinel path)
@@ -485,13 +532,14 @@ async function notifyPositionClosed(symbol: string, lastKnown: Position): Promis
     symbol,
     quantity: lastKnown.quantity,
     entryPrice,
-    exitPrice: lastKnown.marketPrice,
+    exitPrice: close.exitPrice,
     pnl,
     pnlPercent: pnlPct,
     source: "sentinel",
+    estimated: close.estimated,
   };
   tracker.applyEvent(closeEvent);
-  console.log(`[trading-agent] position_closed recorded: ${symbol} | source=sentinel | P&L=${pnlSign}$${pnl.toFixed(2)}`);
+  console.log(`[trading-agent] position_closed recorded: ${symbol} | source=sentinel | P&L${est}=${pnlSign}$${pnl.toFixed(2)}`);
 }
 
 // ── Daily Trading Report ──
@@ -649,6 +697,7 @@ async function sendDailyReport(): Promise<void> {
   // Decisions today
   const decisions = loadRecentDecisions(100).filter((d) => d.timestamp.startsWith(today));
   const buyDecisions = decisions.filter((d) => d.decision === "BUY").length;
+  const approvedBuys = approvedBuyCount(decisions, CONFIDENCE_THRESHOLD);
   const skipDecisions = decisions.filter((d) => d.decision === "SKIP").length;
 
   const pnlPrefix = pnlComputed ? "~" : "";
@@ -681,7 +730,7 @@ async function sendDailyReport(): Promise<void> {
     `Win-Rate: ${winRate30d}% (${totalTrades30d} Trades)`,
     `Monats-P&L: ${monthPnl >= 0 ? "+" : ""}$${monthPnl.toFixed(2)}`,
     ``,
-    decisions.length > 0 ? `KI-Entscheidungen heute: ${buyDecisions} BUY / ${skipDecisions} SKIP` : "",
+    decisions.length > 0 ? `KI-Entscheidungen heute: ${buyDecisions} BUY (davon ${approvedBuys} freigegeben) / ${skipDecisions} SKIP` : "",
   ].filter(Boolean).join("\n");
 
   // ── Meldungsdisziplin: Abweichungen bestimmen ──
@@ -694,7 +743,7 @@ async function sendDailyReport(): Promise<void> {
     positionCount: lastClassification?.positions.length ?? 0,
     protectedCount: lastClassification?.stateCount["protected"] ?? 0,
     hasClassification: !!lastClassification,
-    buyDecisions,
+    buyDecisions: approvedBuys,
     openedToday: todayOrderCount,
   });
 
@@ -1098,7 +1147,19 @@ app.get("/orders", (_req, res) => {
   res.setHeader("X-Deprecated", "Use tracker events");
   const limit = Number((_req.query as any).limit) || 20;
   const orders = loadOrders();
-  res.json(orders.slice(-limit));
+  // Alt-Orders mit offenem Status, die bei IBKR nicht offen sind, nicht als
+  // offen anzeigen (nur Anzeige, orders.jsonl bleibt unverändert)
+  const openIds = ibkr.isConnected() && lastSyncSnapshot && !lastSyncSnapshot.timedOutPhases.includes("openOrders")
+    ? new Set([...lastSyncSnapshot.ownOrders, ...lastSyncSnapshot.foreignOrders].map((o) => o.orderId))
+    : null;
+  res.json(legacyOrdersForDisplay(orders.slice(-limit), openIds));
+});
+
+// Börsenzeiten in UTC für ein Datum (Nachweis Sommer-/Winterzeit), ?date=YYYY-MM-DD
+app.get("/market-hours", (req, res) => {
+  const q = String((req.query as any).date ?? "");
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(q) ? q : new Date().toISOString().slice(0, 10);
+  res.json({ date, open: isMarketOpen(), label: marketStatusLabel(), windows: tradingWindowsUtc(date) });
 });
 
 app.post("/close/:symbol", async (req, res) => {

@@ -13,6 +13,7 @@ import {
 import { evaluateTrade, shouldExecuteTrade, type TradeDecision } from "./ai-decision.js";
 import type { AlertManager } from "./alert-manager.js";
 import { hasEarningsSoon, getEarningsInfo } from "./earnings-calendar.js";
+import { isExchangeOpen, marketStatusLabel } from "./market-hours.js";
 
 const yahooFinance = new YahooFinance({
   validation: { logErrors: false },
@@ -167,25 +168,13 @@ export class OrderExecutor {
     const isEU = symbolInfo?.currency === "EUR";
     const yahooTicker = isEU ? `${candidate.symbol}.DE` : candidate.symbol;
 
-    // Exchange hours gate: only place orders when the target exchange is open
-    const orderTime = new Date();
-    const utcH = orderTime.getUTCHours();
-    const utcM = orderTime.getUTCMinutes();
-    const utcTime = utcH * 60 + utcM;
-    if (isEU) {
-      // XETRA: 09:00–17:30 CET → ~07:00–15:30 UTC (summer), ~08:00–16:30 UTC (winter)
-      // Use conservative window: 07:00–15:30 UTC
-      if (utcTime < 7 * 60 || utcTime >= 15 * 60 + 30) {
-        console.log(`[executor] ${candidate.symbol}: XETRA closed (UTC ${utcH}:${String(utcM).padStart(2, "0")}), skipping`);
-        return null;
-      }
-    } else {
-      // NYSE/NASDAQ: 09:30–16:00 ET → 13:30–20:00 UTC (summer), 14:30–21:00 UTC (winter)
-      // Use conservative window: 13:30–20:00 UTC
-      if (utcTime < 13 * 60 + 30 || utcTime >= 20 * 60) {
-        console.log(`[executor] ${candidate.symbol}: NYSE/NASDAQ closed (UTC ${utcH}:${String(utcM).padStart(2, "0")}), skipping`);
-        return null;
-      }
+    // Exchange hours gate: only evaluate (KI) and place orders when the target
+    // exchange is open — weekday, IBKR holiday, local hours incl. DST
+    // (market-hours.ts). Vorher feste UTC-Fenster ohne Wochentag.
+    const marketExchange = isEU ? "XETRA" : "NYSE";
+    if (!isExchangeOpen(marketExchange)) {
+      console.log(`[executor] ${candidate.symbol}: ${marketExchange} closed (${marketStatusLabel()}), skipping`);
+      return null;
     }
 
     let currentPrice: number;

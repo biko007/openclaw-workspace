@@ -1,5 +1,6 @@
 import { RSI, EMA, BollingerBands } from "technicalindicators";
 import YahooFinance from "yahoo-finance2";
+import { exchangeClock } from "./market-hours.js";
 
 const yahooFinance = new YahooFinance({
   validation: { logErrors: false },
@@ -410,33 +411,24 @@ export function collectDebugStats(
 
 export async function isMarketSafe(): Promise<MarketSafetyResult> {
   // 1. Check market hours (avoid first 15min after open, last 30min before close)
-  const now = new Date();
-  const utcHour = now.getUTCHours();
-  const utcMin = now.getUTCMinutes();
-
-  // US market: 13:30-20:00 UTC (safe window: 13:45-19:30 UTC)
-  const usOpen = utcHour === 13 && utcMin >= 30;
-  const usTrading = utcHour >= 14 && utcHour < 20;
-  const usMarketOpen = usOpen || usTrading;
-
-  if (usMarketOpen) {
-    // First 15 minutes after open (13:30-13:45 UTC)
-    if (utcHour === 13 && utcMin < 45) {
+  // Relative to each exchange's own session (local time incl. DST, early
+  // close from the IBKR calendar) — vorher feste UTC-Zeiten der Sommerzeit.
+  const us = exchangeClock("NYSE");
+  if (us.open) {
+    if (us.sinceOpen < 15) {
       return { safe: false, reason: "First 15min after US open - high volatility" };
     }
-    // Last 30 minutes before close (19:30-20:00 UTC)
-    if (utcHour === 19 && utcMin >= 30) {
+    if (us.toClose <= 30) {
       return { safe: false, reason: "Last 30min before US close - high volatility" };
     }
   }
 
-  // EU market: 07:00-15:30 UTC (safe window: 07:15-15:00 UTC)
-  const euMarketOpen = utcHour >= 7 && (utcHour < 15 || (utcHour === 15 && utcMin <= 30));
-  if (euMarketOpen) {
-    if (utcHour === 7 && utcMin < 15) {
+  const eu = exchangeClock("XETRA");
+  if (eu.open) {
+    if (eu.sinceOpen < 15) {
       return { safe: false, reason: "First 15min after EU open - high volatility" };
     }
-    if (utcHour === 15 && utcMin > 0) {
+    if (eu.toClose < 30) {
       return { safe: false, reason: "Last 30min before EU close - high volatility" };
     }
   }

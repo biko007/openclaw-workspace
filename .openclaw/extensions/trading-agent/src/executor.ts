@@ -3,6 +3,8 @@ import { IBKRConnection, type OrderResult } from "./ibkr.js";
 import {
   loadStrategies,
   loadUniverse,
+  loadPreviousDayPerformance,
+  appendTradeIntent,
   type ScanResult,
   type TradingStatus,
 } from "./store.js";
@@ -14,6 +16,7 @@ import { evaluateTrade, shouldExecuteTrade, type TradeDecision } from "./ai-deci
 import type { AlertManager } from "./alert-manager.js";
 import { hasEarningsSoon, getEarningsInfo } from "./earnings-calendar.js";
 import { isExchangeOpen, marketStatusLabel } from "./market-hours.js";
+import { checkDailyLoss, chooseLevels, type LevelRules } from "./risk-rules.js";
 
 const yahooFinance = new YahooFinance({
   validation: { logErrors: false },
@@ -38,6 +41,9 @@ export interface ExecutedTrade {
   strength: number;
   aiConfidence?: number;
   aiReasoning?: string;
+  /** Woher Stop und Ziel stammen (Option B): KI-Levels oder Standardlevels. */
+  levelSource?: "ki" | "standard";
+  levelReason?: string;
 }
 
 export type NotifyFn = (message: string) => void;
@@ -87,6 +93,21 @@ export class OrderExecutor {
       return [];
     }
 
+    // Tageslimit (Option B): keine neuen Käufe nach −maxLossPercent seit Vortagsschluss.
+    const dailyLoss = checkDailyLoss(loadPreviousDayPerformance()?.netLiquidation, status.netLiquidation, strategies.dailyLossLimit);
+    if (dailyLoss.blocked) {
+      console.log(`[executor] ${dailyLoss.reason} — keine neuen Käufe`);
+      await this.alertManager.sendAlert("daily_loss_limit", "WARN", [
+        `⚠️ *Tageslimit erreicht*`,
+        ``,
+        dailyLoss.reason,
+        `Keine neuen Käufe bis morgen; Stops und Ziele bleiben aktiv.`,
+      ].join("\n"));
+      return [];
+    }
+    if (this.alertManager.isActive("daily_loss_limit")) await this.alertManager.resolve("daily_loss_limit");
+    if (dailyLoss.lossUsd === null && strategies.dailyLossLimit.enabled) console.log(`[executor] ${dailyLoss.reason}`);
+
     // Check max open positions
     const currentPositions = status.positions.length;
     const maxOpen = strategies.maxOpenPositions;
@@ -125,7 +146,7 @@ export class OrderExecutor {
 
     for (const candidate of candidates) {
       try {
-        const trade = await this.executeSingleOrder(candidate, perOrderBudget, stopLossPercent, evalTracking);
+        const trade = await this.executeSingleOrder(candidate, perOrderBudget, stopLossPercent, evalTracking, strategies.levelRules);
         if (trade) executed.push(trade);
       } catch (e) {
         console.error(`[executor] Order failed for ${candidate.symbol}:`, e instanceof Error ? e.message : e);
@@ -161,6 +182,7 @@ export class OrderExecutor {
     budgetUsd: number,
     stopLossPercent: number,
     evalTracking: { totalEvaluated: number; errors: { symbol: string; detail: string }[] },
+    levelRules: LevelRules,
   ): Promise<ExecutedTrade | null> {
     // Get current price from Yahoo Finance
     const universe = loadUniverse();
@@ -241,23 +263,10 @@ export class OrderExecutor {
       return Math.round(p / tick) * tick;
     };
 
-    // Use AI-suggested levels if valid, otherwise calculate defaults
-    let limitPrice = roundTick(currentPrice * 1.001);
-    let stopPrice = roundTick(currentPrice * (1 - stopLossPercent / 100));
-    let takeProfitPrice = roundTick(currentPrice * (1 + (stopLossPercent * 2) / 100));
-
-    if (aiDecision.suggestedEntry && aiDecision.suggestedStop && aiDecision.suggestedTarget) {
-      const aiEntry = roundTick(aiDecision.suggestedEntry);
-      const aiStop = roundTick(aiDecision.suggestedStop);
-      const aiTarget = roundTick(aiDecision.suggestedTarget);
-      // Only use AI levels if they make sense (stop < entry < target)
-      if (aiStop < aiEntry && aiTarget > aiEntry) {
-        limitPrice = aiEntry;
-        stopPrice = aiStop;
-        takeProfitPrice = aiTarget;
-        console.log(`[executor] Using AI-suggested levels for ${candidate.symbol}`);
-      }
-    }
+    // KI-Levels nur bei ausreichendem Stopabstand und CRV, sonst Standardlevels (risk-rules.ts)
+    const levels = chooseLevels(currentPrice, aiDecision, stopLossPercent, levelRules, roundTick);
+    const { limitPrice, stopPrice, takeProfitPrice } = levels;
+    console.log(`[executor] ${candidate.symbol}: ${levels.source === "ki" ? "KI-Levels" : "Standardlevels"} — ${levels.reason}`);
 
     const exchange = symbolInfo?.exchange === "IBIS" ? "IBIS" : "SMART";
     const currency = symbolInfo?.currency || "USD";
@@ -317,7 +326,16 @@ export class OrderExecutor {
       strength: candidate.strength,
       aiConfidence: aiDecision.confidence,
       aiReasoning: aiDecision.reasoning,
+      levelSource: levels.source,
+      levelReason: levels.reason,
     };
+    try {
+      appendTradeIntent({ timestamp: new Date().toISOString(), tradeIntentId, symbol: candidate.symbol, levelSource: levels.source,
+        levelReason: levels.reason, limitPrice, stopPrice, takeProfitPrice, aiConfidence: aiDecision.confidence });
+    } catch (e) {
+      /* Nur Auswertung — eine Schreibstörung darf den Handel nicht stoppen. */
+      console.error("[executor] trade-intents.jsonl nicht geschrieben:", e instanceof Error ? e.message : e);
+    }
 
     console.log(
       `[executor] ${candidate.symbol}: FILLED ${result.actualFilledQty}/${quantity} @ $${fillPrice} | ` +
@@ -338,6 +356,7 @@ export class OrderExecutor {
         `*${t.symbol}* — ${t.signal}`,
         `Kurs: $${t.fillPrice.toFixed(2)} (${t.quantity} Stk, $${t.positionSizeUsd.toFixed(0)})`,
         `Stop: $${t.stopPrice.toFixed(2)} | Target: $${t.takeProfitPrice.toFixed(2)} | R:R 1:${rr}`,
+        t.levelSource ? `Levels: ${t.levelSource === "ki" ? "KI" : "Standard"} (${t.levelReason})` : "",
         ``,
         `*KI-Bewertung:* ${((t.aiConfidence ?? 0) * 100).toFixed(0)}%`,
         t.aiReasoning ? `_${t.aiReasoning}_` : "",

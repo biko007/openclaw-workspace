@@ -157,3 +157,30 @@
 - **`GET /orders`:** Alt-Orders aus `orders.jsonl` mit offenem Status, die bei
   IBKR nicht offen sind, erscheinen als `NotAtIBKR` (`logStatus` = Original).
   Das Log bleibt unverändert.
+
+## Option B: Tageslimit, Levelregeln, Auswertung (ab 2026-10-27)
+
+Owner-Entscheidung 27.10.2026 (Werte aus der Auswertung von 115 Kaufsignalen ≥ 0,75).
+
+- **Tageslimit** (`risk-rules.ts` `checkDailyLoss`, Executor vor jedem Kauf):
+  NLV ≥ 2 % unter dem Vortagsschluss (`performance/*.json`) → keine neuen Käufe,
+  WARN-Alert `daily_loss_limit`; Stops, Ziele und Guardian laufen weiter.
+  Gemessen an der NLV, weil das Paper-Konto als DailyPnL immer 0 meldet.
+  Ohne Vortags-NLV kein Block, nur Log-Zeile.
+- **Levelregeln** (`chooseLevels`): KI-Levels nur bei Stop ≥ 1,0 % unter Einstieg
+  und CRV ≥ 1,5; sonst Standardlevels Stop −`stopLossPercent` %, Ziel +2 × (CRV 2).
+  Die Quelle steht in der Trade-Meldung und in `trade-intents.jsonl`.
+- **Konfiguration:** `strategies.json` (fehlt = Vorgaben in `store.ts`);
+  `dailyLossLimit` und `levelRules` werden mit den Vorgaben zusammengeführt, eine
+  ältere Datei schaltet die Regeln also nicht still ab.
+- **`GET /auswertung`** (`auswertung.ts`, nur lesend): Abschlüsse aus den
+  IBKR-Ausführungen in `orders-v2.jsonl` (Korrekturen über execIdBase; Ausstiege
+  unter der Kennung einer älteren Position desselben Symbols werden zugeordnet;
+  TWS-Glattstellung aus `position_closed` als „geschätzt“), Monatswerte
+  (Trefferquote, Ø Gewinn/Verlust je Währung, größter Gewinn/Verlust, je
+  Levelquelle und Ausstiegsgrund), NLV-Änderung und davon an Tagen ohne Position
+  (Zins u. a.). Altpositionen vor 12.06.2026 ohne Einstieg im Log werden genannt,
+  nicht gewertet.
+- **Rückweg der Regeln ohne Code:** `strategies.json` mit
+  `"dailyLossLimit": {"enabled": false}` bzw. `"levelRules": {"minRewardRisk": 0, "minStopPercent": 0}`;
+  wirkt beim nächsten Scan.

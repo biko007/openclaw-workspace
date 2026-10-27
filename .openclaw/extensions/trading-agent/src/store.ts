@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, appendFileSync, existsSync, ren
 import { join } from "node:path";
 import type { Position } from "./ibkr.js";
 
-const BASE = join(
+export const BASE = join(
   process.env.HOME || "/home/biko",
   ".openclaw/workspace/artifacts/personal/trading",
 );
@@ -46,6 +46,8 @@ export interface StrategyConfig {
   newsTrading: StrategyEntry;
   maxOpenPositions: number;
   dailyLossLimit: { enabled: boolean; maxLossPercent: number };
+  /** Mindestanforderung an KI-Levels (Option B, risk-rules.ts). */
+  levelRules: { minRewardRisk: number; minStopPercent: number };
 }
 
 export interface OrderRecord {
@@ -164,11 +166,22 @@ const DEFAULT_STRATEGIES: StrategyConfig = {
   meanReversion: { enabled: true, maxPositionSizePercent: 20, stopLossPercent: 3 },
   newsTrading: { enabled: true, maxPositionSizePercent: 20, stopLossPercent: 3 },
   maxOpenPositions: 10,
-  dailyLossLimit: { enabled: false, maxLossPercent: 5 },
+  /* Owner-Entscheidung 27.10.2026 (Option B): Tageslimit 2 % der NLV aktiv;
+     KI-Levels nur bei Stop ≥ 1,0 % und CRV ≥ 1,5, sonst Standardlevels. */
+  dailyLossLimit: { enabled: true, maxLossPercent: 2 },
+  levelRules: { minRewardRisk: 1.5, minStopPercent: 1.0 },
 };
 
 export function loadStrategies(): StrategyConfig {
-  return readJson<StrategyConfig>(STRATEGIES_PATH, DEFAULT_STRATEGIES);
+  const file = readJson<Partial<StrategyConfig>>(STRATEGIES_PATH, {});
+  /* Fehlende Felder aus den Vorgaben ergänzen — eine ältere strategies.json
+     darf die neuen Regeln nicht still abschalten. */
+  return {
+    ...DEFAULT_STRATEGIES,
+    ...file,
+    dailyLossLimit: { ...DEFAULT_STRATEGIES.dailyLossLimit, ...(file.dailyLossLimit ?? {}) },
+    levelRules: { ...DEFAULT_STRATEGIES.levelRules, ...(file.levelRules ?? {}) },
+  } as StrategyConfig;
 }
 
 export function saveStrategies(config: StrategyConfig): void {
@@ -259,6 +272,28 @@ export function loadPreviousDayPerformance(): PerformanceEntry | null {
   const dateStr = yesterday.toISOString().slice(0, 10);
   const entries = loadPerformance(year, month);
   return entries.find((e) => e.date === dateStr) ?? null;
+}
+
+// ── Trade-Intents (Option B, Auswertung) ──
+
+/** Je eröffneter Position: woher Stop und Ziel kamen — für die Monatsauswertung (auswertung.ts). */
+export interface TradeIntentRecord {
+  timestamp: string;
+  tradeIntentId: string;
+  symbol: string;
+  levelSource: "ki" | "standard";
+  levelReason: string;
+  limitPrice: number;
+  stopPrice: number;
+  takeProfitPrice: number;
+  aiConfidence?: number;
+}
+
+export const TRADE_INTENTS_PATH = join(BASE, "trade-intents.jsonl");
+
+export function appendTradeIntent(r: TradeIntentRecord): void {
+  ensureDir(BASE);
+  appendFileSync(TRADE_INTENTS_PATH, JSON.stringify(r) + "\n", "utf8");
 }
 
 // ── Universe ──

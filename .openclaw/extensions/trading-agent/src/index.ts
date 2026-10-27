@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { ladeAuswertung } from "./auswertung.js";
+import { BASE as TRADING_BASE } from "./store.js";
 import { join } from "node:path";
 import { exec as execCb } from "node:child_process";
 import { promisify } from "node:util";
@@ -1004,6 +1006,15 @@ app.get("/version", (_req, res) => {
 app.get("/weekly-stats", (_req, res) => {
   try {
     res.json({ ok: true, ...weeklyStats() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+// Option B: Ergebnis je Abschluss aus IBKR-Ausführungen und Monatsauswertung (nur lesend).
+app.get("/auswertung", (_req, res) => {
+  try {
+    res.json({ ok: true, ...ladeAuswertung(TRADING_BASE, currentStatus.connected ? currentStatus.positions.map((p) => p.symbol) : undefined) });
   } catch (e) {
     res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
   }
